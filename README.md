@@ -12,11 +12,9 @@ https://spinningup.openai.com/en/latest/algorithms/sac.html
 
 Two different methods given for using SAC with discrete action spaces. 
 
-1: sac_discrete_gb uses the Gumbel Softmax distribtuion to reparameterize the discrete action space. 
-   This keeps algorithm similar to the original SAC implementation for continuous action spaces.
+* sac_discrete_gb uses the Gumbel Softmax distribtuion to reparameterize the discrete action space. This keeps algorithm similar to the original SAC implementation for continuous action spaces.
    
-2: sac_discrete_kl avoids reparmeterisation and calculates the entropy and KL divergence from the discrete actions 
-   given by the policy network.
+* sac_discrete_kl avoids reparmeterisation and calculates the entropy and KL divergence from the discrete actions given by the policy network.
    
 A version of the continuous and discrete_kl algorithms that work with image observations such as the atari
 gym environments are under sac_cont_image and sac_discrete_kl_atari.
