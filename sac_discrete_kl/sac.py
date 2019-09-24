@@ -326,8 +326,8 @@ if __name__ == '__main__':
     }
 
     rl_params = {
-        # 'env_name':'FrozenLake-v0',
-        'env_name':'CartPole-v1',
+        'env_name':'FrozenLake-v0',
+        # 'env_name':'CartPole-v1',
         # 'env_name':'Taxi-v2',
         # 'env_name':'MountainCar-v0',
         # 'env_name':'Acrobot-v1',
@@ -349,7 +349,7 @@ if __name__ == '__main__':
     }
 
     saved_model_dir = '../saved_models'
-    logger_kwargs = setup_logger_kwargs(exp_name='discrete_sac_kl_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
+    logger_kwargs = setup_logger_kwargs(exp_name='sac_discrete_kl_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
     env = gym.make(rl_params['env_name'])
 
     sac(lambda:env, actor_critic=a_out_mlp_actor_critic,

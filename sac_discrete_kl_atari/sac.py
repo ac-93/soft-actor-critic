@@ -282,7 +282,8 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
             if save_freq is not None:
                 if (epoch % save_freq == 0) or (epoch == epochs-1):
                     print('Saving...')
-                    logger.save_state({'env': env}, None)
+                    logger.save_state({'env': env},  itr=save_iter)
+                    save_iter+=1
 
             # Test the performance of the deterministic version of the agent.
             test_agent(n=10, render=render)
@@ -348,8 +349,8 @@ if __name__ == '__main__':
         'render':True,
     }
 
-    saved_model_dir = '/home/alexc/Documents/drl_algos/saved_models'
-    logger_kwargs = setup_logger_kwargs(exp_name='atari_sac_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
+    saved_model_dir = '../saved_models'
+    logger_kwargs = setup_logger_kwargs(exp_name='sac_discrete_kl_atari_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
 
     env = gym.make(rl_params['env_name'])
 

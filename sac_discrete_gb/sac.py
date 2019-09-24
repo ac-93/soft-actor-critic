@@ -348,7 +348,7 @@ if __name__ == '__main__':
     }
 
     saved_model_dir = '../saved_models'
-    logger_kwargs = setup_logger_kwargs(exp_name='discrete_sac_gb_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
+    logger_kwargs = setup_logger_kwargs(exp_name='sac_discrete_gb_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
 
     env = gym.make(rl_params['env_name'])
 
