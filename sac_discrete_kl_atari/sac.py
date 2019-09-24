@@ -7,100 +7,47 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import tensorflow as tf
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
+from common_utils import *
 from core import *
 from spinup.utils.logx import EpochLogger
 
+def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
 
-class ReplayBuffer:
-    """
-    A simple FIFO experience replay buffer for SAC agents.
-    """
-
-    def __init__(self, obs_dim, act_dim, size):
-        self.obs1_buf = np.zeros([size, obs_dim], dtype=np.float32)
-        self.obs2_buf = np.zeros([size, obs_dim], dtype=np.float32)
-        self.acts_buf = np.zeros([size, act_dim], dtype=np.float32)
-        self.rews_buf = np.zeros(size, dtype=np.float32)
-        self.done_buf = np.zeros(size, dtype=np.float32)
-        self.ptr, self.size, self.max_size = 0, 0, size
-
-    def store(self, obs, act, rew, next_obs, done):
-        self.obs1_buf[self.ptr] = obs
-        self.obs2_buf[self.ptr] = next_obs
-        self.acts_buf[self.ptr] = act
-        self.rews_buf[self.ptr] = rew
-        self.done_buf[self.ptr] = done
-        self.ptr = (self.ptr+1) % self.max_size
-        self.size = min(self.size+1, self.max_size)
-
-    def sample_batch(self, batch_size=32):
-        idxs = np.random.randint(0, self.size, size=batch_size)
-        return dict(obs1=self.obs1_buf[idxs],
-                    obs2=self.obs2_buf[idxs],
-                    acts=self.acts_buf[idxs],
-                    rews=self.rews_buf[idxs],
-                    done=self.done_buf[idxs])
-
-
-def process_observation(o, obs_dim, observation_type):
-    if observation_type == 'Discrete':
-        o = np.eye(obs_dim)[o]
-    return o
-
-def process_action(a, act_dim):
-    one_hot_a = np.eye(act_dim)[a]
-    return one_hot_a
-
-def process_reward(reward):
-    # apply clipping here if needed
-    return reward
-
-"""
-
-Soft Actor-Critic
-
-(With slight variations that bring it closer to TD3)
-
-"""
-
-def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
-                logger_kwargs=dict(),
-                network_params=dict(),
-                rl_params=dict()):
-
-    logger = EpochLogger(**logger_kwargs)
-    logger.save_config(locals())
-
+    # set all the rl params
+    thresh          = rl_params['thresh']
     seed            = rl_params['seed']
     epochs          = rl_params['epochs']
     steps_per_epoch = rl_params['steps_per_epoch']
     replay_size     = rl_params['replay_size']
-    alpha           = rl_params['alpha']
-    target_entropy  = rl_params['target_entropy']
     gamma           = rl_params['gamma']
     polyak          = rl_params['polyak']
     lr              = rl_params['lr']
+    alpha           = rl_params['alpha']
+    target_entropy  = rl_params['target_entropy']
     batch_size      = rl_params['batch_size']
     start_steps     = rl_params['start_steps']
     max_ep_len      = rl_params['max_ep_len']
+    max_noop        = rl_params['max_noop']
     save_freq       = rl_params['save_freq']
     render          = rl_params['render']
+
+    logger = EpochLogger(**logger_kwargs)
+    logger.save_config(locals())
 
     tf.set_random_seed(seed)
     np.random.seed(seed)
 
-    env, test_env = env_fn(), env_fn()
+    train_env, test_env = env_fn(), env_fn()
     obs_space = env.observation_space
     act_space = env.action_space
 
-    try:
-        obs_dim = obs_space.n
-        observation_type = 'Discrete'
-    except AttributeError as e:
-        obs_dim = obs_space.shape[0]
-        observation_type = 'Box'
-
+    # get the size after resize
+    obs_dim = network_params['input_dims']
     act_dim = act_space.n
+
+    # init a state buffer for storing last m states
+    train_state_buffer = StateBuffer(m=obs_dim[2])
+    test_state_buffer  = StateBuffer(m=obs_dim[2])
 
     # Inputs to computation graph
     x_ph, a_ph, x2_ph, r_ph, d_ph = placeholders(obs_dim, act_dim, obs_dim, None, None)
@@ -118,14 +65,13 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
     else: # fixed alpha
         alpha = tf.get_variable('alpha', dtype=tf.float32, initializer=alpha)
 
-
     # Main outputs from computation graph
     with tf.variable_scope('main'):
-        mu, pi, pi_entropy, pi_logits, q1_logits, q2_logits, q1_a, q2_a, q1_pi, q2_pi = actor_critic(x_ph, a_ph, alpha, act_space, **network_params)
+        mu, pi, pi_entropy, pi_logits, q1_logits, q2_logits, q1_a, q2_a, q1_pi, q2_pi = build_models(x_ph, a_ph, act_dim, network_params)
 
     # Target value network
     with tf.variable_scope('target'):
-        _, _, pi_entropy_targ, _, _, _,  _, _, q1_pi_targ, q2_pi_targ = actor_critic(x2_ph, a_ph, alpha, act_space, **network_params)
+        _, _, pi_entropy_targ, _, _, _,  _, _, q1_pi_targ, q2_pi_targ = build_models(x2_ph, a_ph, act_dim, network_params)
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
@@ -136,7 +82,7 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
     print(('\nNumber of parameters: \t alpha: %d, \t pi: %d, \t' + \
            'q1: %d, \t q2: %d, \t total: %d\n')%var_counts)
 
-    # Min Double-Q:
+    # Min Double-Q: (check the logp_pi bit)
     min_q_logits  = tf.minimum(q1_logits, q2_logits)
     min_q_pi_targ = tf.minimum(q1_pi_targ, q2_pi_targ)
 
@@ -152,7 +98,7 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
     pi_action_probs    = tf.nn.softmax(pi_logits, axis=-1)
     q_log_action_probs = tf.nn.log_softmax(min_q_logits, axis=-1)
     pi_q_cross_entropy = -tf.reduce_sum(pi_action_probs * q_log_action_probs, axis=-1)
-    pi_loss = pi_q_cross_entropy - alpha*pi_entropy
+    pi_loss = tf.reduce_mean(pi_q_cross_entropy - alpha*pi_entropy)
 
     # alpha loss for temperature parameter
     alpha_backup = tf.stop_gradient(target_entropy - pi_entropy)
@@ -164,11 +110,11 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
     train_pi_op = pi_optimizer.minimize(pi_loss, var_list=get_vars('main/pi'))
 
     # Value train op
-    # (control dep of train_pi_op because sess.run otherwise evaluates in nondeterministic order)
     value_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-08)
     with tf.control_dependencies([train_pi_op]):
         train_value_op = value_optimizer.minimize(value_loss, var_list=get_vars('main/q'))
 
+    # Alpha train op
     alpha_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-08)
     with tf.control_dependencies([train_value_op]):
         train_alpha_op = alpha_optimizer.minimize(alpha_loss, var_list=get_vars('log_alpha'))
@@ -195,55 +141,100 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
 
     # Setup model saving
     logger.setup_tf_saver(sess, inputs={'x': x_ph, 'a': a_ph},
-                                outputs={'pi': pi, 'q1': q1_a, 'q2': q2_a})
+                                outputs={'mu': mu, 'pi': pi, 'q1': q1_a, 'q2': q2_a})
 
-    def get_action(o, deterministic=False):
+    def get_action(state, deterministic=False):
+        state = state.astype('float32') / 255.
         act_op = mu if deterministic else pi
-        return sess.run(act_op, feed_dict={x_ph: [o]})[0]
+        return sess.run(act_op, feed_dict={x_ph: [state]})[0]
+
+    def reset(env, state_buffer):
+        o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+
+        # fire to start game and perform no-op for some frames to randomise start
+        o, _, _, _ = env.step(1) # Fire action to start game
+        for _ in range(np.random.randint(1, max_noop)):
+                o, _, _, _ = env.step(0) # Action 'NOOP'
+
+        o = process_image_observation(o, obs_dim, thresh)
+        r = process_reward(r)
+        old_lives = env.ale.lives()
+        state = state_buffer.init_state(init_obs=o)
+        return o, r, d, ep_ret, ep_len, old_lives, state
 
     def test_agent(n=10, render=True):
-        global sess, mu, pi, q1_a, q2_a, q1_pi, q2_pi
+        global sess, mu, pi, q1, q2, q1_pi, q2_pi
         for j in range(n):
-            o, r, d, ep_ret, ep_len = test_env.reset(), 0, False, 0, 0
-            o = process_observation(o, obs_dim, observation_type)
+            o, r, d, ep_ret, ep_len, test_old_lives, test_state = reset(test_env, test_state_buffer)
+            terminal_life_lost_test = False
 
             if render: test_env.render()
 
             while not(d or (ep_len == max_ep_len)):
+
+                # start by firing
+                if terminal_life_lost_test:
+                    a = 1
+                else:
+                    # Take  lower variance actions at test(noise_scale=0.05)
+                    a = get_action(test_state, True)
+
                 # Take deterministic actions at test time
-                o, r, d, _ = test_env.step(get_action(o, True))
-                o = process_observation(o, obs_dim, observation_type)
+                o, r, d, _ = test_env.step(a)
+                o = process_image_observation(o, obs_dim, thresh)
+                r = process_reward(r)
+                test_state = test_state_buffer.append_state(o)
                 ep_ret += r
                 ep_len += 1
+
+                if test_env.ale.lives() < test_old_lives:
+                    test_old_lives = test_env.ale.lives()
+                    terminal_life_lost_test = True
+                else:
+                    terminal_life_lost_test = False
 
                 if render: test_env.render()
 
             if render: test_env.close()
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
 
+    # ================== Main training Loop  ==================
+
     start_time = time.time()
-    o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
-    o = process_observation(o, obs_dim, observation_type)
+    o, r, d, ep_ret, ep_len, old_lives, state = reset(train_env, train_state_buffer)
     total_steps = steps_per_epoch * epochs
+
+    save_iter = 0
+    terminal_life_lost = False
 
     # Main loop: collect experience in env and update/log each epoch
     for t in range(total_steps):
-        """
-        Until start_steps have elapsed, randomly sample actions
-        from a uniform distribution for better exploration. Afterwards,
-        use the learned policy.
-        """
-        if t > start_steps:
-            a = get_action(o)
+
+        # press fire to start
+        if terminal_life_lost:
+            a = 1
         else:
-            a = env.action_space.sample()
+            if t > start_steps:
+                a = get_action(state)
+            else:
+                a = env.action_space.sample()
 
         # Step the env
         o2, r, d, _ = env.step(a)
-        o2 = process_observation(o2, obs_dim, observation_type)
-        a = process_action(a, act_dim)
+        o2        = process_image_observation(o2, obs_dim, thresh)
+        r         = process_reward(r)
+        one_hot_a = process_action(a, act_dim)
+
+        next_state = train_state_buffer.append_state(o2)
+
         ep_ret += r
         ep_len += 1
+
+        if train_env.ale.lives() < old_lives:
+            old_lives = train_env.ale.lives()
+            terminal_life_lost = True
+        else:
+            terminal_life_lost = False
 
         # Ignore the "done" signal if it comes from hitting the time
         # horizon (that is, when it's an artificial terminal signal
@@ -251,11 +242,12 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
         d = False if ep_len==max_ep_len else d
 
         # Store experience to replay buffer
-        replay_buffer.store(o, a, r, o2, d)
+        replay_buffer.store(state, one_hot_a, r, next_state, terminal_life_lost)
 
         # Super critical, easy to overlook step: make sure to update
         # most recent observation!
         o = o2
+        state = next_state
 
         if d or (ep_len == max_ep_len):
             """
@@ -271,7 +263,6 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
                              r_ph:  batch['rews'],
                              d_ph:  batch['done'],
                             }
-                            
                 outs = sess.run(step_ops, feed_dict)
                 logger.store(LossPi=outs[0],
                              LossQ1=outs[1],    LossQ2=outs[2],
@@ -280,8 +271,7 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
                              LossAlpha=outs[7], Alpha=outs[8])
 
             logger.store(EpRet=ep_ret, EpLen=ep_len)
-            o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
-            o = process_observation(o, obs_dim, observation_type)
+            o, r, d, ep_ret, ep_len, old_lives, state = reset(train_env, train_state_buffer)
 
 
         # End of epoch wrap-up
@@ -289,11 +279,13 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
             epoch = t // steps_per_epoch
 
             # Save model
-            if (epoch % save_freq == 0) or (epoch == epochs-1):
-                logger.save_state({'env': env}, None)
+            if save_freq is not None:
+                if (epoch % save_freq == 0) or (epoch == epochs-1):
+                    print('Saving...')
+                    logger.save_state({'env': env}, None)
 
             # Test the performance of the deterministic version of the agent.
-            test_agent(n=10,render=render)
+            test_agent(n=10, render=render)
 
             # Log info about epoch
             logger.log_tabular('Epoch', epoch)
@@ -320,39 +312,51 @@ if __name__ == '__main__':
     from spinup.utils.run_utils import setup_logger_kwargs
 
     network_params = {
-        'hidden_sizes':[64, 64],
-        'activation':'relu',
-        'policy':kl_policy
+        'input_dims':[84,84,4],
+        'conv_filters':(32, 64, 64, 1024),
+        'kernel_width':(8,4,3,7),
+        'strides':(4,2,1,1),
+        'pooling':'none',
+        'pooling_width':2,
+        'pooling_strides':1,
+        'dense_units':(),
+        'hidden_activation':'relu',
+        'output_activation':'linear',
+        'batch_norm':False,
+        'dropout':0.0
     }
 
     rl_params = {
-        'env_name':'FrozenLake-v0',
-        # 'env_name':'CartPole-v1',
-        # 'env_name':'Taxi-v2',
-        # 'env_name':'MountainCar-v0',
-        # 'env_name':'Acrobot-v1',
-        # 'env_name':'LunarLander-v2',
-        'seed': int(123),
-        'epochs': int(300),
-        'steps_per_epoch': 2000,
-        'replay_size': 100000,
+        'env_name':'BreakoutDeterministic-v4',
+        # 'env_name':'PongDeterministic-v4',
+        'thresh':True,
+        'seed':int(0),
+        'epochs':int(100),
+        'steps_per_epoch':10000,
+        'replay_size':int(4e5),
+        'gamma':0.99,
+        'polyak':0.995,
+        'lr':0.00025,
         'alpha': 'auto',
         'target_entropy':'auto', # fixed or auto define with act_dim
-        'gamma': 0.95,
-        'polyak': 0.995,
-        'lr': 1e-3,
-        'batch_size': 128,
-        'start_steps': 4000,
-        'max_ep_len': 500,
-        'save_freq': 5,
-        'render': False
+        'huber_delta':1.0,
+        'batch_size':32,
+        'start_steps':50000,
+        'max_ep_len':18000,
+        'max_noop':10,
+        'save_freq':5,
+        'render':True,
     }
 
-    saved_model_dir = '../saved_models'
-    logger_kwargs = setup_logger_kwargs(exp_name='discrete_sac_kl_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
+    saved_model_dir = '/home/alexc/Documents/drl_algos/saved_models'
+    logger_kwargs = setup_logger_kwargs(exp_name='atari_sac_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
+
     env = gym.make(rl_params['env_name'])
 
-    sac(lambda:env, actor_critic=a_out_mlp_actor_critic,
-                    logger_kwargs=logger_kwargs,
+    # avoids crash when later rendering the environment
+    if rl_params['render']:
+        test_env(lambda:env)
+
+    sac(lambda:env, logger_kwargs=logger_kwargs,
                     network_params=network_params,
                     rl_params=rl_params)
