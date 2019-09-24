@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+
 class ReplayBuffer:
     """
     A simple FIFO experience replay buffer.
@@ -47,11 +48,11 @@ class StateBuffer:
     def append_state(self, obs):
         new_state = np.concatenate( (self.current_state, obs[...,np.newaxis]), axis=2)
         self.current_state = new_state[:,:,1:]
-        # plot_state(self.current_state, self.m)
         return self.current_state
 
 """
 Linear annealing of epsilon value for exploration
+may be useful to use with target entropy
 """
 def update_eps(current_step, min_eps=0.1, max_eps=1, max_steps=1e6):
     if current_step<=max_steps:
@@ -62,7 +63,7 @@ def update_eps(current_step, min_eps=0.1, max_eps=1, max_steps=1e6):
 
 """
 Run a quick test of the environment, needed due to error when rendering
-for some reason doing this before hand fixes it...
+atari, for some reason doing this before hand fixes it...
 """
 def test_env(env_fn, num_steps=25):
     env = env_fn()
@@ -76,13 +77,11 @@ def test_env(env_fn, num_steps=25):
     env.close()
 
 """
-Process the observation into grayscale, uint8 format for saving memory.
+Process the observation into grayscale, uint8 format for saving memory in replay buffer.
 Possibly threshold the image to speed up training
 """
 def process_image_observation(observation, obs_dim, thresh=False):
     if list(observation.shape) != obs_dim:
-        # observation = process_image(observation, gray=True, bbox=None, dims=(obs_dim[0], obs_dim[1]))
-
         # Convert to gray scale
         observation = cv2.cvtColor(observation, cv2.COLOR_BGR2GRAY)
         # Add channel axis
