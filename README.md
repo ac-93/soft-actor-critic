@@ -1,12 +1,12 @@
 # soft-actor-critic
 
-Implentations of Soft Actor Critic (SAC) algorithms from:
+## Implentations of Soft Actor Critic (SAC) algorithms from:
 
 1: Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor, Haarnoja et al, 2018 https://arxiv.org/abs/1801.01290
 
 2: Soft Actor-Critic Algorithms and Applications, Haarnoja et al, 2019, https://arxiv.org/abs/1812.05905
 
-Based on the implementations given in Spinningup
+## Based on the implementations given in Spinningup
 
 https://spinningup.openai.com/en/latest/algorithms/sac.html
 
