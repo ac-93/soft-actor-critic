@@ -3,15 +3,14 @@ import numpy as np
 import time
 import gym
 
-import tensorflow as tf
-config = tf.ConfigProto()
-config.gpu_options.allow_growth = True
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+import tensorflow as tf
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
 from common_utils import *
-from image_utils import *
-from image_based.sac_image_algo.core import *
-from spinup_utils.logx import EpochLogger
+# from image_utils import *
+from core import *
+from spinup.utils.logx import EpochLogger
 
 """
 
@@ -31,8 +30,8 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     gamma           = rl_params['gamma']
     polyak          = rl_params['polyak']
     lr              = rl_params['lr']
-    alpha               = rl_params['alpha']
-    target_entropy      = rl_params['target_entropy']
+    alpha           = rl_params['alpha']
+    target_entropy  = rl_params['target_entropy']
     batch_size      = rl_params['batch_size']
     start_steps     = rl_params['start_steps']
     max_ep_len      = rl_params['max_ep_len']
@@ -91,9 +90,9 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
 
     # Count variables
     var_counts = tuple(count_vars(scope) for scope in
-                       ['main/pi', 'main/q1', 'main/q2', 'main/v', 'main'])
-    print(('\nNumber of parameters: \t pi: %d, \t' + \
-           'q1: %d, \t q2: %d, \t v: %d, \t total: %d\n')%var_counts)
+                       ['log_alpha', 'main/pi', 'main/q1', 'main/q2', 'main'])
+    print(('\nNumber of parameters: \t alpha: %d, \t pi: %d, \t' + \
+           'q1: %d, \t q2: %d, \t total: %d\n')%var_counts)
 
     # Min Double-Q:
     min_q_pi = tf.minimum(q1_pi, q2_pi)
@@ -281,7 +280,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
 
 if __name__ == '__main__':
 
-    from spinup_utils.run_utils import setup_logger_kwargs
+    from spinup.utils.run_utils import setup_logger_kwargs
 
     network_params = {
         'input_dims':[96,96,4],
@@ -317,7 +316,7 @@ if __name__ == '__main__':
         'render':True,
     }
 
-    saved_model_dir = '/home/alexc/Documents/drl_algos/saved_models'
+    saved_model_dir = '../saved_models'
     logger_kwargs = setup_logger_kwargs(exp_name='sac_image_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
 
     env = gym.make(rl_params['env_name'])

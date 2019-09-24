@@ -1,18 +1,14 @@
 import sys, os
-par_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-sys.path.append(par_path)
-
 import numpy as np
 import time
 import gym
 
-import tensorflow as tf
-config = tf.ConfigProto()
-config.gpu_options.allow_growth = True
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+import tensorflow as tf
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
-from sac_algo.core import *
-from spinup_utils.logx import EpochLogger
+from core import *
+from spinup.utils.logx import EpochLogger
 
 
 class ReplayBuffer:
@@ -290,7 +286,7 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
 
 if __name__ == '__main__':
 
-    from spinup_utils.run_utils import setup_logger_kwargs
+    from spinup.utils.run_utils import setup_logger_kwargs
 
     # Hyper Params
     network_params = {
@@ -320,7 +316,7 @@ if __name__ == '__main__':
         'render': False
     }
 
-    saved_model_dir = '/home/alexc/Documents/drl_algos/basic/saved_models'
+    saved_model_dir = '../saved_models/'
     logger_kwargs = setup_logger_kwargs(exp_name='sac_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
     env = gym.make(rl_params['env_name'])
 

@@ -1,18 +1,14 @@
 import sys, os
-par_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-sys.path.append(par_path)
-
 import numpy as np
 import time
 import gym
 
-import tensorflow as tf
-config = tf.ConfigProto()
-config.gpu_options.allow_growth = True
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+import tensorflow as tf
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
-from discrete_sac_kl_algo.core import *
-from spinup_utils.logx import EpochLogger
+from core import *
+from spinup.utils.logx import EpochLogger
 
 
 class ReplayBuffer:
@@ -125,11 +121,11 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
 
     # Main outputs from computation graph
     with tf.variable_scope('main'):
-        mu, pi, logp_pi, pi_logits, pi_entropy, q1_logits, q2_logits, q1_a, q2_a, q1_pi, q2_pi = actor_critic(x_ph, a_ph, alpha, act_space, **network_params)
+        mu, pi, pi_entropy, pi_logits, q1_logits, q2_logits, q1_a, q2_a, q1_pi, q2_pi = actor_critic(x_ph, a_ph, alpha, act_space, **network_params)
 
     # Target value network
     with tf.variable_scope('target'):
-        _, _, logp_pi_targ, _, pi_entropy_targ, _, _,  _, _, q1_pi_targ, q2_pi_targ = actor_critic(x2_ph, a_ph, alpha, act_space, **network_params)
+        _, _, pi_entropy_targ, _, _, _,  _, _, q1_pi_targ, q2_pi_targ = actor_critic(x2_ph, a_ph, alpha, act_space, **network_params)
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
@@ -151,19 +147,6 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
     q1_loss = 0.5 * tf.reduce_mean((q_backup - q1_a)**2)
     q2_loss = 0.5 * tf.reduce_mean((q_backup - q2_a)**2)
     value_loss = q1_loss + q2_loss
-
-    # Soft actor losses (KL divergence between policy and Q network outputs)
-    # tf categorica method
-    # q_logits = tf.exp(min_q_logits)
-    # policy_dist = tf.distributions.Categorical(logits=pi_logits)
-    # min_q_dist  = tf.distributions.Categorical(logits=min_q_logits)
-    # pi_loss = tf.distributions.kl_divergence(policy_dist, min_q_dist)
-
-    # defined method
-    # q_logits =  min_q_logits
-    # policy_dist = tf.nn.softmax([pi_logits], axis=-1)
-    # min_q_dist  = tf.nn.softmax([q_logits], axis=-1)
-    # pi_loss = tf.reduce_sum(policy_dist * tf.log(policy_dist/min_q_dist))
 
     # cross entropy method (D_KL = H(P,Q) - H(P))
     pi_action_probs    = tf.nn.softmax(pi_logits, axis=-1)
@@ -198,7 +181,7 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
 
     # All ops to call during one training step
     step_ops = [pi_loss, q1_loss, q2_loss, q1_a, q2_a,
-                logp_pi, pi_entropy, target_entropy,
+                pi_entropy, target_entropy,
                 alpha_loss, alpha,
                 train_pi_op, train_value_op, train_alpha_op, target_update]
 
@@ -288,16 +271,13 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
                              r_ph:  batch['rews'],
                              d_ph:  batch['done'],
                             }
-
-                # outs = sess.run(q_logits, feed_dict)
-                # print(outs)
-
+                            
                 outs = sess.run(step_ops, feed_dict)
                 logger.store(LossPi=outs[0],
                              LossQ1=outs[1],    LossQ2=outs[2],
                              Q1Vals=outs[3],    Q2Vals=outs[4],
-                             LogPi=outs[5],     PiEntropy=outs[6], TargEntropy=outs[7],
-                             LossAlpha=outs[8], Alpha=outs[9])
+                             PiEntropy=outs[5], TargEntropy=outs[6],
+                             LossAlpha=outs[7], Alpha=outs[8])
 
             logger.store(EpRet=ep_ret, EpLen=ep_len)
             o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
@@ -324,7 +304,6 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
             logger.log_tabular('TotalEnvInteracts', t)
             logger.log_tabular('Q1Vals', with_min_and_max=True)
             logger.log_tabular('Q2Vals', with_min_and_max=True)
-            logger.log_tabular('LogPi', average_only=True)
             logger.log_tabular('PiEntropy', average_only=True)
             logger.log_tabular('TargEntropy', average_only=True)
             logger.log_tabular('Alpha', average_only=True)
@@ -338,7 +317,7 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
 
 if __name__ == '__main__':
 
-    from spinup_utils.run_utils import setup_logger_kwargs
+    from spinup.utils.run_utils import setup_logger_kwargs
 
     network_params = {
         'hidden_sizes':[64, 64],
@@ -369,11 +348,8 @@ if __name__ == '__main__':
         'render': False
     }
 
-    saved_model_dir = '/home/alexc/Documents/drl_algos/basic/saved_models'
+    saved_model_dir = '../saved_models'
     logger_kwargs = setup_logger_kwargs(exp_name='discrete_sac_kl_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
-
-    # env = gym.make('FrozenLake-v0', desc=None, map_name="4x4", is_slippery=False)
-    # env = gym.make('FrozenLake-v0', desc=None, map_name="8x8", is_slippery=False)
     env = gym.make(rl_params['env_name'])
 
     sac(lambda:env, actor_critic=a_out_mlp_actor_critic,

@@ -1,10 +1,6 @@
 import numpy as np
 import os
-
 import tensorflow as tf
-config = tf.ConfigProto()
-config.gpu_options.allow_growth = True
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 EPS = 1e-8
 

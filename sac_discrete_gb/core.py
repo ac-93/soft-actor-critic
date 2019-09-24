@@ -1,10 +1,6 @@
 import numpy as np
 import os
-
 import tensorflow as tf
-config = tf.ConfigProto()
-config.gpu_options.allow_growth = True
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 EPS = 1e-8
 
@@ -44,9 +40,6 @@ def gumbel_policy(x, act_dim, hidden_sizes, activation):
     # policy network outputs
     net = mlp(x, list(hidden_sizes), activation, activation)
     logits = tf.layers.dense(net, act_dim, activation='linear')
-    # logits = tf.layers.dense(net, act_dim, activation=tf.tanh)
-    # LOGIT_MIN, LOGIT_MAX = -20, 20
-    # logits = LOGIT_MIN + 0.5 * (LOGIT_MAX - LOGIT_MIN) * (logits + 1)
 
     # action and log action probabilites (log_softmax covers numerical problems)
     action_probs = tf.nn.softmax([logits], axis=-1)

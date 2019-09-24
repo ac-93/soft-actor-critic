@@ -2,10 +2,6 @@ import numpy as np
 import os
 
 import tensorflow as tf
-import tensorflow_probability as tfp
-config = tf.ConfigProto()
-config.gpu_options.allow_growth = True
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 
 def placeholder(dim=None):
@@ -40,9 +36,6 @@ def kl_policy(x, act_dim, act_space, hidden_sizes, activation):
     # policy network outputs
     net = mlp(x, list(hidden_sizes), activation, activation)
     logits = tf.layers.dense(net, act_dim, activation='linear')
-    # logits = tf.layers.dense(net, act_dim, activation=tf.tanh)
-    # LOGIT_MIN, LOGIT_MAX = -20, 20
-    # logits = LOGIT_MIN + 0.5 * (LOGIT_MAX - LOGIT_MIN) * (logits + 1)
 
     # action and log action probabilites (log_softmax covers numerical problems)
     action_probs = tf.nn.softmax(logits, axis=-1)
@@ -55,12 +48,12 @@ def kl_policy(x, act_dim, act_space, hidden_sizes, activation):
     policy_dist = tf.distributions.Categorical(logits=logits)
     pi = policy_dist.sample()
 
+    # entropy over discrete actions
     pi_entropy = -tf.reduce_sum(action_probs * log_action_probs, axis=-1)
 
     onehot_pi = tf.one_hot(pi, depth=act_dim, axis=-1, dtype=tf.float32)
-    logp_pi = tf.reduce_sum(tf.multiply(log_action_probs, onehot_pi), axis=-1)
 
-    return mu, pi, onehot_pi, logp_pi, logits, pi_entropy
+    return mu, pi, onehot_pi, pi_entropy, logits,
 
 """
 Actor-Critics
@@ -70,7 +63,7 @@ def a_out_mlp_actor_critic(x, a, alpha, act_space, hidden_sizes=[400,300], activ
     act_dim = a.shape.as_list()[-1]
 
     with tf.variable_scope('pi'):
-        mu, pi, onehot_pi, logp_pi, pi_logits, pi_entropy = kl_policy(x, act_dim, act_space, hidden_sizes, activation)
+        mu, pi, onehot_pi, pi_entropy, pi_logits = kl_policy(x, act_dim, act_space, hidden_sizes, activation)
 
     # vfs
     with tf.variable_scope('q1'):
@@ -83,4 +76,4 @@ def a_out_mlp_actor_critic(x, a, alpha, act_space, hidden_sizes=[400,300], activ
         q2_a  = tf.reduce_sum(tf.multiply(q2_logits, a), axis=1)
         q2_pi = tf.reduce_sum(tf.multiply(q2_logits, onehot_pi), axis=1)
 
-    return mu, pi, logp_pi, pi_logits, pi_entropy, q1_logits, q2_logits, q1_a, q2_a, q1_pi, q2_pi
+    return mu, pi, pi_entropy, pi_logits, q1_logits, q2_logits, q1_a, q2_a, q1_pi, q2_pi
