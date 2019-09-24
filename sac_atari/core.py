@@ -1,10 +1,6 @@
 import numpy as np
 import os
-
 import tensorflow as tf
-config = tf.ConfigProto()
-config.gpu_options.allow_growth = True
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 EPS = 1e-8
 
@@ -121,8 +117,6 @@ def clip_but_pass_gradient(x, l=-1., u=1.):
     return x + tf.stop_gradient((u - x)*clip_up + (l - x)*clip_low)
 
 
-"""
-"""
 def kl_policy(x, act_dim, network_params):
 
     # policy network outputs
@@ -140,6 +134,7 @@ def kl_policy(x, act_dim, network_params):
     policy_dist = tf.distributions.Categorical(logits=logits)
     pi = policy_dist.sample()
 
+    # entropy over discrete actions
     pi_entropy = -tf.reduce_sum(action_probs * log_action_probs, axis=-1)
 
     onehot_pi = tf.one_hot(pi, depth=act_dim, axis=-1, dtype=tf.float32)

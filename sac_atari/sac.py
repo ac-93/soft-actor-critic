@@ -1,20 +1,15 @@
 import sys, os
-par_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-sys.path.append(par_path)
-
 import numpy as np
 import time
 import gym
 
-import tensorflow as tf
-config = tf.ConfigProto()
-config.gpu_options.allow_growth = True
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+import tensorflow as tf
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
 from common_utils import *
-from image_utils import *
-from atari.sac_algo.core import *
-from spinup_utils.logx import EpochLogger
+from core import *
+from spinup.utils.logx import EpochLogger
 
 def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
 
@@ -83,8 +78,8 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
 
     # Count variables
     var_counts = tuple(count_vars(scope) for scope in
-                       ['main/pi', 'main/q1', 'main/q2', 'main'])
-    print(('\nNumber of parameters: \t pi: %d, \t' + \
+                       ['log_alpha', 'main/pi', 'main/q1', 'main/q2', 'main'])
+    print(('\nNumber of parameters: \t alpha: %d, \t pi: %d, \t' + \
            'q1: %d, \t q2: %d, \t total: %d\n')%var_counts)
 
     # Min Double-Q: (check the logp_pi bit)
@@ -314,7 +309,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
 
 if __name__ == '__main__':
 
-    from spinup_utils.run_utils import setup_logger_kwargs
+    from spinup.utils.run_utils import setup_logger_kwargs
 
     network_params = {
         'input_dims':[84,84,4],
@@ -330,7 +325,6 @@ if __name__ == '__main__':
         'batch_norm':False,
         'dropout':0.0
     }
-
 
     rl_params = {
         'env_name':'BreakoutDeterministic-v4',
@@ -351,7 +345,7 @@ if __name__ == '__main__':
         'max_ep_len':18000,
         'max_noop':10,
         'save_freq':5,
-        'render':False,
+        'render':True,
     }
 
     saved_model_dir = '/home/alexc/Documents/drl_algos/saved_models'
