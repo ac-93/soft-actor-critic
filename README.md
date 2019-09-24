@@ -18,3 +18,5 @@ Two different methods given for using SAC with discrete action spaces.
    
 A version of the continuous and discrete_kl algorithms that work with image observations such as the atari
 gym environments are under sac_cont_image and sac_discrete_kl_atari.
+
+I've not yet done too much testing so it is possible that there are some problems with the implementations...
