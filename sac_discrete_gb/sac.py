@@ -33,13 +33,33 @@ class ReplayBuffer:
         self.ptr = (self.ptr+1) % self.max_size
         self.size = min(self.size+1, self.max_size)
 
-    def sample_batch(self, batch_size=32):
+    def sample_batch(self, batch_size=32, use_cer=False):
         idxs = np.random.randint(0, self.size, size=batch_size)
+
+        if use_cer: # combined expierience replay
+            idxs[-1] = self.ptr
+
         return dict(obs1=self.obs1_buf[idxs],
                     obs2=self.obs2_buf[idxs],
                     acts=self.acts_buf[idxs],
                     rews=self.rews_buf[idxs],
                     done=self.done_buf[idxs])
+
+"""
+Store the observations in ring buffer type array of size m
+"""
+class StateBuffer:
+    def __init__(self,m):
+        self.m = m
+
+    def init_state(self, init_obs):
+        self.current_state = np.concatenate([init_obs]*self.m, axis=0)
+        return self.current_state
+
+    def append_state(self, obs):
+        new_state = np.concatenate( (self.current_state, obs), axis=0)
+        self.current_state = new_state[obs.shape[0]:]
+        return self.current_state
 
 
 def process_observation(o, obs_dim, observation_type):
@@ -54,6 +74,13 @@ def process_action(a, act_dim):
 def process_reward(reward):
     # apply clipping here if needed
     return reward
+
+# clip gradient whilst handling None error
+def ClipIfNotNone(grad, clip_grad_val):
+    if grad is None:
+        return grad
+    return tf.clip_by_value(grad, -clip_grad_val, clip_grad_val)
+
 
 """
 
@@ -86,24 +113,33 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
     save_freq           = rl_params['save_freq']
     render              = rl_params['render']
 
+    state_hist_n        = rl_params['state_hist_n']
+    clip_grad_val       = rl_params['clip_grad_val']
+    use_cer             = rl_params['use_cer']
+
     tf.set_random_seed(seed)
     np.random.seed(seed)
 
-    env, test_env = env_fn(), env_fn()
-    obs = env.observation_space
-    act = env.action_space
+    train_env, test_env = env_fn(), env_fn()
+    obs = train_env.observation_space
+    act = train_env.action_space
 
     try:
-        obs_dim = obs.n
+        obs_dim  = obs.n
         observation_type = 'Discrete'
     except AttributeError as e:
         obs_dim = obs.shape[0]
         observation_type = 'Box'
 
+    obs_dim = obs_dim
     act_dim = act.n
 
+    # init a state buffer for storing last m states
+    train_state_buffer = StateBuffer(m=state_hist_n)
+    test_state_buffer  = StateBuffer(m=state_hist_n)
+
     # Inputs to computation graph
-    x_ph, a_ph, x2_ph, r_ph, d_ph = placeholders(obs_dim, act_dim, obs_dim, None, None)
+    x_ph, a_ph, x2_ph, r_ph, d_ph = placeholders(obs_dim*state_hist_n, act_dim, obs_dim*state_hist_n, None, None)
 
     # alpha Params
     if target_entropy == 'auto': # discrete case should be target_entropy < ln(act_dim)
@@ -127,7 +163,7 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
         _, _, logp_pi_targ,  _, _, q1_pi_targ, q2_pi_targ = actor_critic(x2_ph, a_ph, **network_params)
 
     # Experience buffer
-    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
+    replay_buffer = ReplayBuffer(obs_dim=obs_dim*state_hist_n, act_dim=act_dim, size=replay_size)
 
     # Count variables
     var_counts = tuple(count_vars(scope) for scope in
@@ -159,13 +195,23 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
     # Policy train op
     # (has to be separate from value train op, because q1_pi appears in pi_loss)
     pi_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-08)
-    train_pi_op = pi_optimizer.minimize(pi_loss, var_list=get_vars('main/pi'))
+    if clip_grad_val is not None:
+        gvs = pi_optimizer.compute_gradients(pi_loss,  var_list=get_vars('main/pi'))
+        capped_gvs = [(ClipIfNotNone(grad, clip_grad_val), var) for grad, var in gvs]
+        train_pi_op = pi_optimizer.apply_gradients(capped_gvs)
+    else:
+        train_pi_op = pi_optimizer.minimize(pi_loss, var_list=get_vars('main/pi'))
 
     # Value train op
     # (control dep of train_pi_op because sess.run otherwise evaluates in nondeterministic order)
     value_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-08)
     with tf.control_dependencies([train_pi_op]):
-        train_value_op = value_optimizer.minimize(value_loss, var_list=get_vars('main/q'))
+        if clip_grad_val is not None:
+            gvs = value_optimizer.compute_gradients(value_loss, var_list=get_vars('main/q'))
+            capped_gvs = [(ClipIfNotNone(grad, clip_grad_val), var) for grad, var in gvs]
+            train_value_op = value_optimizer.apply_gradients(capped_gvs)
+        else:
+            train_value_op = value_optimizer.minimize(value_loss, var_list=get_vars('main/q'))
 
     alpha_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-08)
     with tf.control_dependencies([train_value_op]):
@@ -193,22 +239,30 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
     logger.setup_tf_saver(sess, inputs={'x': x_ph, 'a': a_ph},
                                 outputs={'pi': pi, 'q1': q1_a, 'q2': q2_a})
 
-    def get_action(o, deterministic=False):
+    def get_action(state, deterministic=False):
         act_op = mu if deterministic else pi
-        return sess.run(act_op, feed_dict={x_ph: [o]})[0]
+        return sess.run(act_op, feed_dict={x_ph: [state]})[0]
+
+    def reset(env, state_buffer):
+        o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+        o = process_observation(o, obs_dim, observation_type)
+        r = process_reward(r)
+        state = state_buffer.init_state(init_obs=o)
+        return o, r, d, ep_ret, ep_len, state
 
     def test_agent(n=10, render=True):
         global sess, mu, pi, q1_a, q2_a, q1_pi, q2_pi
         for j in range(n):
-            o, r, d, ep_ret, ep_len = test_env.reset(), 0, False, 0, 0
-            o = process_observation(o, obs_dim, observation_type)
+            o, r, d, ep_ret, ep_len, test_state = reset(test_env, test_state_buffer)
 
             if render: test_env.render()
 
             while not(d or (ep_len == max_ep_len)):
                 # Take deterministic actions at test time
-                o, r, d, _ = test_env.step(get_action(o, True))
+                o, r, d, _ = test_env.step(get_action(test_state, True))
                 o = process_observation(o, obs_dim, observation_type)
+                r = process_reward(r)
+                test_state = test_state_buffer.append_state(o)
                 ep_ret += r
                 ep_len += 1
 
@@ -218,8 +272,7 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
 
     start_time = time.time()
-    o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
-    o = process_observation(o, obs_dim, observation_type)
+    o, r, d, ep_ret, ep_len, state = reset(train_env, train_state_buffer)
     total_steps = steps_per_epoch * epochs
 
     # Main loop: collect experience in env and update/log each epoch
@@ -230,14 +283,16 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
         use the learned policy.
         """
         if t > start_steps:
-            a = get_action(o)
+            a = get_action(state)
         else:
-            a = env.action_space.sample()
+            a = train_env.action_space.sample()
 
         # Step the env
-        o2, r, d, _ = env.step(a)
+        o2, r, d, _ = train_env.step(a)
         o2 = process_observation(o2, obs_dim, observation_type)
         a = process_action(a, act_dim)
+        r = process_reward(r)
+        next_state = train_state_buffer.append_state(o2)
         ep_ret += r
         ep_len += 1
 
@@ -247,11 +302,12 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
         d = False if ep_len==max_ep_len else d
 
         # Store experience to replay buffer
-        replay_buffer.store(o, a, r, o2, d)
+        replay_buffer.store(state, a, r, next_state, d)
 
         # Super critical, easy to overlook step: make sure to update
         # most recent observation!
         o = o2
+        state = next_state
 
         if d or (ep_len == max_ep_len):
             """
@@ -260,12 +316,12 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
             original paper.
             """
             for j in range(ep_len):
-                batch = replay_buffer.sample_batch(batch_size)
-                feed_dict = {x_ph: batch['obs1'],
+                batch = replay_buffer.sample_batch(batch_size, use_cer=use_cer)
+                feed_dict = {x_ph:  batch['obs1'],
                              x2_ph: batch['obs2'],
-                             a_ph: batch['acts'],
-                             r_ph: batch['rews'],
-                             d_ph: batch['done'],
+                             a_ph:  batch['acts'],
+                             r_ph:  batch['rews'],
+                             d_ph:  batch['done'],
                             }
 
                 outs = sess.run(step_ops, feed_dict)
@@ -278,8 +334,7 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
 
 
             logger.store(EpRet=ep_ret, EpLen=ep_len)
-            o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
-            o = process_observation(o, obs_dim, observation_type)
+            o, r, d, ep_ret, ep_len, state = reset(train_env, train_state_buffer)
 
 
         # End of epoch wrap-up
@@ -288,7 +343,7 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
 
             # Save model
             if (epoch % save_freq == 0) or (epoch == epochs-1):
-                logger.save_state({'env': env}, None)
+                logger.save_state({'env': train_env}, None)
 
             # Test the performance of the deterministic version of the agent.
             test_agent(n=10,render=render)
@@ -318,33 +373,37 @@ if __name__ == '__main__':
     from spinup.utils.run_utils import setup_logger_kwargs
 
     network_params = {
-        'hidden_sizes':[64, 64],
+        'hidden_sizes':[64, 64, 32],
         'activation':'relu',
         'policy':gumbel_policy
     }
 
     rl_params = {
-        'env_name':'FrozenLake-v0',
+        # 'env_name':'FrozenLake-v0',
         # 'env_name':'CartPole-v1',
         # 'env_name':'Taxi-v2',
         # 'env_name':'MountainCar-v0',
         # 'env_name':'Acrobot-v1',
-        # 'env_name':'LunarLander-v2',
-        'seed': int(123),
+        'env_name':'LunarLander-v2',
+        'seed': int(1),
         'actor_critic':a_in_mlp_actor_critic,
         'epochs': int(100),
         'steps_per_epoch': 2000,
         'replay_size': 100000,
         'alpha': 'auto',
         'target_entropy':'auto', # fixed or auto define with act_dim
-        'gamma': 0.95,
+        'gamma': 0.99,
         'polyak': 0.995,
-        'lr': 1e-3,
-        'batch_size': 128,
+        'lr': 5e-3,
+        'batch_size': 256,
         'start_steps': 4000,
         'max_ep_len': 500,
         'save_freq': 5,
-        'render': True
+        'render': False,
+
+        'state_hist_n': 4,
+        'clip_grad_val': 0.5,
+        'use_cer': True
     }
 
     saved_model_dir = '../saved_models'

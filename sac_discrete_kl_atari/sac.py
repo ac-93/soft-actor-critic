@@ -94,7 +94,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     q2_loss = 0.5 * tf.reduce_mean((q_backup - q2_a)**2)
     value_loss = q1_loss + q2_loss
 
-    # cross entropy method (D_KL = H(P,Q) - H(P))
+    # kl using cross entropy (D_KL = H(P,Q) - H(P))
     pi_action_probs    = tf.nn.softmax(pi_logits, axis=-1)
     q_log_action_probs = tf.nn.log_softmax(min_q_logits, axis=-1)
     pi_q_cross_entropy = -tf.reduce_sum(pi_action_probs * q_log_action_probs, axis=-1)
