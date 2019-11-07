@@ -61,6 +61,9 @@ class StateBuffer:
         self.current_state = new_state[obs.shape[0]:]
         return self.current_state
 
+"""
+Process features of the environment
+"""
 def process_observation(o, obs_dim, observation_type):
     if observation_type == 'Discrete':
         o = np.eye(obs_dim)[o]
@@ -75,13 +78,22 @@ def process_reward(reward):
     return reward
 
 """
+Linear annealing from start to stop value based on current step and max_steps
+"""
+def linear_anneal(current_step, start=0.1, stop=1.0, steps=1e6):
+    if current_step<=steps:
+        eps = stop + (start - stop) * (1 - current_step/steps)
+    else:
+        eps=start
+    return eps
 
-Soft Actor-Critic
+"""
+
+Discrete Soft Actor-Critic
 
 (With slight variations that bring it closer to TD3)
 
 """
-
 def sac(env_fn, actor_critic=mlp_actor_critic,
                 logger_kwargs=dict(),
                 network_params=dict(),
@@ -100,14 +112,18 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     max_ep_len          = rl_params['max_ep_len']
     save_freq           = rl_params['save_freq']
     render              = rl_params['render']
-    # entropy params
-    alpha               = rl_params['alpha']
-    target_entropy      = rl_params['target_entropy']
+
     # rl params
     gamma               = rl_params['gamma']
     polyak              = rl_params['polyak']
     lr                  = rl_params['lr']
     state_hist_n        = rl_params['state_hist_n']
+
+    # entropy params
+    alpha                = rl_params['alpha']
+    target_entropy_start = rl_params['target_entropy_start']
+    target_entropy_stop  = rl_params['target_entropy_stop']
+    target_entropy_steps = rl_params['target_entropy_steps']
 
     tf.set_random_seed(seed)
     np.random.seed(seed)
@@ -135,19 +151,17 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     # Inputs to computation graph
     x_ph, a_ph, x2_ph, r_ph, d_ph = placeholders(obs_dim*state_hist_n, act_dim, obs_dim*state_hist_n, None, None)
 
-    # alpha Params
-    if target_entropy == 'auto': # discrete case should be target_entropy < ln(act_dim)
-        target_entropy = tf.log(tf.cast(act_dim, tf.float32)) * 0.3
-    else:
-        target_entropy = tf.cast(target_entropy, tf.float32)
+    # alpha and entropy setup
+    max_target_entropy = tf.log(tf.cast(act_dim, tf.float32))
+    target_entropy_prop_ph =  tf.placeholder(dtype=tf.float32, shape=())
+    target_entropy = max_target_entropy * target_entropy_prop_ph
 
-    log_alpha = tf.get_variable('log_alpha', dtype=tf.float32, initializer=target_entropy)
+    log_alpha = tf.get_variable('log_alpha', dtype=tf.float32, initializer=0.0)
 
     if alpha == 'auto': # auto tune alpha
         alpha = tf.exp(log_alpha)
     else: # fixed alpha
         alpha = tf.get_variable('alpha', dtype=tf.float32, initializer=alpha)
-
 
     # Main outputs from computation graph
     with tf.variable_scope('main'):
@@ -223,9 +237,9 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     logger.setup_tf_saver(sess, inputs={'x': x_ph, 'a': a_ph},
                                 outputs={'pi': pi, 'q1': q1_a, 'q2': q2_a})
 
-    def get_action(o, deterministic=False):
+    def get_action(state, deterministic=False):
         act_op = mu if deterministic else pi
-        return sess.run(act_op, feed_dict={x_ph: [o]})[0]
+        return sess.run(act_op, feed_dict={x_ph: [state]})[0]
 
     def reset(env, state_buffer):
         o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
@@ -243,7 +257,7 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
 
             while not(d or (ep_len == max_ep_len)):
                 # Take deterministic actions at test time
-                o, r, d, _ = test_env.step(get_action(o, True))
+                o, r, d, _ = test_env.step(get_action(test_state, True))
                 o = process_observation(o, obs_dim, observation_type)
                 r = process_reward(r)
                 test_state = test_state_buffer.append_state(o)
@@ -259,6 +273,8 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     o, r, d, ep_ret, ep_len, state = reset(train_env, train_state_buffer)
     total_steps = steps_per_epoch * epochs
 
+    target_entropy_prop = linear_anneal(current_step=0, start=target_entropy_start, stop=target_entropy_stop, steps=target_entropy_steps)
+
     # Main loop: collect experience in env and update/log each epoch
     for t in range(total_steps):
         """
@@ -267,7 +283,7 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
         use the learned policy.
         """
         if t > start_steps:
-            a = get_action(o)
+            a = get_action(state)
         else:
             a = train_env.action_space.sample()
 
@@ -286,11 +302,12 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
         d = False if ep_len==max_ep_len else d
 
         # Store experience to replay buffer
-        replay_buffer.store(o, a, r, o2, d)
+        replay_buffer.store(state, a, r, next_state, d)
 
         # Super critical, easy to overlook step: make sure to update
         # most recent observation!
         o = o2
+        state = next_state
 
         if d or (ep_len == max_ep_len):
             """
@@ -305,6 +322,7 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
                              a_ph:  batch['acts'],
                              r_ph:  batch['rews'],
                              d_ph:  batch['done'],
+                             target_entropy_prop_ph: target_entropy_prop
                             }
 
                 outs = sess.run(step_ops, feed_dict)
@@ -321,6 +339,9 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
         # End of epoch wrap-up
         if t > 0 and t % steps_per_epoch == 0:
             epoch = t // steps_per_epoch
+
+            # update target entropy every epoch
+            target_entropy_prop = linear_anneal(current_step=t, start=target_entropy_start, stop=target_entropy_stop, steps=target_entropy_steps)
 
             # Save model
             if (epoch % save_freq == 0) or (epoch == epochs-1):
@@ -383,11 +404,13 @@ if __name__ == '__main__':
         'gamma': 0.99,
         'polyak': 0.995,
         'lr': 0.0003,
-        'state_hist_n': 1,
+        'state_hist_n': 4,
 
         # entropy params
         'alpha': 'auto',
-        'target_entropy':'auto' # fixed or auto define with act_dim
+        'target_entropy_start':0.3, # proportion of max_entropy
+        'target_entropy_stop':0.3,
+        'target_entropy_steps':1e5,
     }
 
 

@@ -2,15 +2,18 @@ import sys, os
 import numpy as np
 import time
 import gym
-
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import tensorflow as tf
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+from spinup.utils.logx import EpochLogger
 
 from common_utils import *
-# from image_utils import *
 from core import *
-from spinup.utils.logx import EpochLogger
+
+# configure gpu use and supress tensorflow warnings
+gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.6)
+tf_config = tf.compat.v1.ConfigProto(gpu_options=gpu_options)
+tf_config.gpu_options.allow_growth = True
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
 """
 

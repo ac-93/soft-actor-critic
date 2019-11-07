@@ -51,16 +51,15 @@ class StateBuffer:
         return self.current_state
 
 """
-Linear annealing of epsilon value for exploration
-may be useful to use with target entropy
+Linear annealing from start to stop value based on current step and max_steps
 """
-def update_eps(current_step, min_eps=0.1, max_eps=1, max_steps=1e6):
-    if current_step<=max_steps:
-        eps = min_eps + (max_eps - min_eps) * (1 - current_step/max_steps)
+def linear_anneal(current_step, start=0.1, stop=1.0, steps=1e6):
+    if current_step<=steps:
+        eps = stop + (start - stop) * (1 - current_step/steps)
     else:
-        eps=min_eps
+        eps=start
     return eps
-
+    
 """
 Run a quick test of the environment, needed due to error when rendering
 atari, for some reason doing this before hand fixes it...

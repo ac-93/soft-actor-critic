@@ -77,6 +77,16 @@ def process_reward(reward):
     return reward
 
 """
+Linear annealing from start to stop value based on current step and max_steps
+"""
+def linear_anneal(current_step, start=0.1, stop=1.0, steps=1e6):
+    if current_step<=steps:
+        eps = stop + (start - stop) * (1 - current_step/steps)
+    else:
+        eps=start
+    return eps
+
+"""
 
 Discrete Soft Actor-Critic using Gumbel-Softmax Reparametization
 
@@ -101,14 +111,18 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
     max_ep_len          = rl_params['max_ep_len']
     save_freq           = rl_params['save_freq']
     render              = rl_params['render']
-    # entropy params
-    alpha               = rl_params['alpha']
-    target_entropy      = rl_params['target_entropy']
+
     # rl params
     gamma               = rl_params['gamma']
     polyak              = rl_params['polyak']
     lr                  = rl_params['lr']
     state_hist_n        = rl_params['state_hist_n']
+
+    # entropy params
+    alpha               = rl_params['alpha']
+    target_entropy_start = rl_params['target_entropy_start']
+    target_entropy_stop  = rl_params['target_entropy_stop']
+    target_entropy_steps = rl_params['target_entropy_steps']
 
     tf.set_random_seed(seed)
     np.random.seed(seed)
@@ -137,13 +151,12 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
     # Inputs to computation graph
     x_ph, a_ph, x2_ph, r_ph, d_ph = placeholders(obs_dim*state_hist_n, act_dim, obs_dim*state_hist_n, None, None)
 
-    # alpha Params
-    if target_entropy == 'auto': # discrete case should be target_entropy < ln(act_dim)
-        target_entropy = tf.log(tf.cast(act_dim, tf.float32)) * 0.3
-    else:
-        target_entropy = tf.cast(target_entropy, tf.float32)
+    # alpha and entropy setup
+    max_target_entropy = tf.log(tf.cast(act_dim, tf.float32))
+    target_entropy_prop_ph =  tf.placeholder(dtype=tf.float32, shape=())
+    target_entropy = max_target_entropy * target_entropy_prop_ph
 
-    log_alpha = tf.get_variable('log_alpha', dtype=tf.float32, initializer=target_entropy)
+    log_alpha = tf.get_variable('log_alpha', dtype=tf.float32, initializer=0.0)
 
     if alpha == 'auto': # auto tune alpha
         alpha = tf.exp(log_alpha)
@@ -257,6 +270,8 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
     o, r, d, ep_ret, ep_len, state = reset(train_env, train_state_buffer)
     total_steps = steps_per_epoch * epochs
 
+    target_entropy_prop = linear_anneal(current_step=0, start=target_entropy_start, stop=target_entropy_stop, steps=target_entropy_steps)
+
     # Main loop: collect experience in env and update/log each epoch
     for t in range(total_steps):
         """
@@ -304,16 +319,13 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
                              a_ph:  batch['acts'],
                              r_ph:  batch['rews'],
                              d_ph:  batch['done'],
+                             target_entropy_prop_ph: target_entropy_prop
                             }
 
                 outs = sess.run(step_ops, feed_dict)
                 logger.store(LossPi=outs[0], LossQ1=outs[1], LossQ2=outs[2],
                              Q1Vals=outs[3], Q2Vals=outs[4], LogPi=outs[5], TargEntropy=outs[6],
                              LossAlpha=outs[7], Alpha=outs[8])
-
-
-
-
 
             logger.store(EpRet=ep_ret, EpLen=ep_len)
             o, r, d, ep_ret, ep_len, state = reset(train_env, train_state_buffer)
@@ -322,6 +334,9 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
         # End of epoch wrap-up
         if t > 0 and t % steps_per_epoch == 0:
             epoch = t // steps_per_epoch
+
+            # update target entropy every epoch
+            target_entropy_prop = linear_anneal(current_step=t, start=target_entropy_start, stop=target_entropy_stop, steps=target_entropy_steps)
 
             # Save model
             if (epoch % save_freq == 0) or (epoch == epochs-1):
@@ -389,7 +404,9 @@ if __name__ == '__main__':
 
         # entropy params
         'alpha': 'auto',
-        'target_entropy':'auto' # fixed or auto define with act_dim
+        'target_entropy_start':1.0, # proportion of max_entropy
+        'target_entropy_stop':0.3,
+        'target_entropy_steps':5e4,
     }
 
     saved_model_dir = '../saved_models'

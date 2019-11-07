@@ -2,28 +2,32 @@ import sys, os
 import numpy as np
 import time
 import gym
-
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import tensorflow as tf
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+from spinup.utils.logx import EpochLogger
 
 from common_utils import *
 from core import *
-from spinup.utils.logx import EpochLogger
+
+# configure gpu use and supress tensorflow warnings
+gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.8)
+tf_config = tf.compat.v1.ConfigProto(gpu_options=gpu_options)
+tf_config.gpu_options.allow_growth = True
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
 def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
 
-    # set all the rl params
+    logger = EpochLogger(**logger_kwargs)
+    logger.save_config(locals())
+
+    # env params
     thresh          = rl_params['thresh']
+
+    # control params
     seed            = rl_params['seed']
     epochs          = rl_params['epochs']
     steps_per_epoch = rl_params['steps_per_epoch']
     replay_size     = rl_params['replay_size']
-    gamma           = rl_params['gamma']
-    polyak          = rl_params['polyak']
-    lr              = rl_params['lr']
-    alpha           = rl_params['alpha']
-    target_entropy  = rl_params['target_entropy']
     batch_size      = rl_params['batch_size']
     start_steps     = rl_params['start_steps']
     max_ep_len      = rl_params['max_ep_len']
@@ -31,8 +35,15 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     save_freq       = rl_params['save_freq']
     render          = rl_params['render']
 
-    logger = EpochLogger(**logger_kwargs)
-    logger.save_config(locals())
+    # rl params
+    gamma           = rl_params['gamma']
+    polyak          = rl_params['polyak']
+    lr              = rl_params['lr']
+
+    alpha                = rl_params['alpha']
+    target_entropy_start = rl_params['target_entropy_start']
+    target_entropy_stop  = rl_params['target_entropy_stop']
+    target_entropy_steps = rl_params['target_entropy_steps']
 
     tf.set_random_seed(seed)
     np.random.seed(seed)
@@ -45,6 +56,9 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     obs_dim = network_params['input_dims']
     act_dim = act_space.n
 
+    # Experience buffer
+    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
+
     # init a state buffer for storing last m states
     train_state_buffer = StateBuffer(m=obs_dim[2])
     test_state_buffer  = StateBuffer(m=obs_dim[2])
@@ -52,13 +66,12 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     # Inputs to computation graph
     x_ph, a_ph, x2_ph, r_ph, d_ph = placeholders(obs_dim, act_dim, obs_dim, None, None)
 
-    # alpha Params
-    if target_entropy == 'auto': # discrete case should be target_entropy < ln(act_dim)
-        target_entropy = tf.log(tf.cast(act_dim, tf.float32)) * 0.5
-    else:
-        target_entropy = tf.cast(target_entropy, tf.float32)
+    # alpha and entropy setup
+    max_target_entropy = tf.log(tf.cast(act_dim, tf.float32))
+    target_entropy_prop_ph =  tf.placeholder(dtype=tf.float32, shape=())
+    target_entropy = max_target_entropy * target_entropy_prop_ph
 
-    log_alpha = tf.get_variable('log_alpha', dtype=tf.float32, initializer=target_entropy)
+    log_alpha = tf.get_variable('log_alpha', dtype=tf.float32, initializer=0.0)
 
     if alpha == 'auto': # auto tune alpha
         alpha = tf.exp(log_alpha)
@@ -72,9 +85,6 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     # Target value network
     with tf.variable_scope('target'):
         _, _, logp_pi_targ, _, _, _,  _, _, q1_pi_targ, q2_pi_targ = build_models(x2_ph, a_ph, act_dim, network_params)
-
-    # Experience buffer
-    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
 
     # Count variables
     var_counts = tuple(count_vars(scope) for scope in
@@ -201,6 +211,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     o, r, d, ep_ret, ep_len, old_lives, state = reset(train_env, train_state_buffer)
     total_steps = steps_per_epoch * epochs
 
+    target_entropy_prop = linear_anneal(current_step=0, start=target_entropy_start, stop=target_entropy_stop, steps=target_entropy_steps)
     save_iter = 0
     terminal_life_lost = False
 
@@ -259,6 +270,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
                              a_ph:  batch['acts'],
                              r_ph:  batch['rews'],
                              d_ph:  batch['done'],
+                             target_entropy_prop_ph: target_entropy_prop
                             }
                 outs = sess.run(step_ops, feed_dict)
                 logger.store(LossPi=outs[0],
@@ -274,6 +286,9 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
         # End of epoch wrap-up
         if t > 0 and t % steps_per_epoch == 0:
             epoch = t // steps_per_epoch
+
+            # update target entropy every epoch
+            target_entropy_prop = linear_anneal(current_step=t, start=target_entropy_start, stop=target_entropy_stop, steps=target_entropy_steps)
 
             # Save model
             if save_freq is not None:
@@ -325,25 +340,33 @@ if __name__ == '__main__':
     }
 
     rl_params = {
+        # env params
         'env_name':'BreakoutDeterministic-v4',
         # 'env_name':'PongDeterministic-v4',
         'thresh':True,
+
+        # control params
         'seed':int(0),
         'epochs':int(100),
         'steps_per_epoch':10000,
         'replay_size':int(4e5),
-        'gamma':0.99,
-        'polyak':0.995,
-        'lr':0.00025,
-        'alpha': 'auto',
-        'target_entropy':'auto', # fixed or auto define with act_dim
-        'huber_delta':1.0,
         'batch_size':32,
         'start_steps':50000,
         'max_ep_len':18000,
         'max_noop':10,
         'save_freq':5,
         'render':True,
+
+        # rl params
+        'gamma':0.99,
+        'polyak':0.995,
+        'lr':0.00025,
+
+        # entropy params
+        'alpha': 'auto',
+        'target_entropy_start':1.0, # proportion of max_entropy
+        'target_entropy_stop':0.4,
+        'target_entropy_steps':1e5,
     }
 
     saved_model_dir = '../saved_models'
