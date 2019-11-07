@@ -67,11 +67,11 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
 
     # Main outputs from computation graph
     with tf.variable_scope('main'):
-        mu, pi, pi_entropy, pi_logits, q1_logits, q2_logits, q1_a, q2_a, q1_pi, q2_pi = build_models(x_ph, a_ph, act_dim, network_params)
+        mu, pi, action_probs, log_action_probs, q1_logits, q2_logits, q1_a, q2_a = build_models(x_ph, a_ph, act_dim, network_params)
 
     # Target value network
     with tf.variable_scope('target'):
-        _, _, pi_entropy_targ, _, _, _,  _, _, q1_pi_targ, q2_pi_targ = build_models(x2_ph, a_ph, act_dim, network_params)
+        _, _, action_probs_targ, log_action_probs_targ, q1_logits_targ, q2_logits_targ,  _, _, = build_models(x2_ph, a_ph, act_dim, network_params)
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
@@ -82,25 +82,24 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     print(('\nNumber of parameters: \t alpha: %d, \t pi: %d, \t' + \
            'q1: %d, \t q2: %d, \t total: %d\n')%var_counts)
 
-    # Min Double-Q: (check the logp_pi bit)
-    min_q_logits  = tf.minimum(q1_logits, q2_logits)
-    min_q_pi_targ = tf.minimum(q1_pi_targ, q2_pi_targ)
+    # Min Double-Q:
+    min_q_logits       = tf.minimum(q1_logits, q2_logits)
+    min_q_logits_targ  = tf.minimum(q1_logits_targ, q2_logits_targ)
 
     # Targets for Q regression
-    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient(min_q_pi_targ + alpha * pi_entropy_targ)
+    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient( tf.reduce_sum(action_probs_targ * (min_q_logits_targ - alpha * log_action_probs_targ), axis=-1))
 
     # critic losses
     q1_loss = 0.5 * tf.reduce_mean((q_backup - q1_a)**2)
     q2_loss = 0.5 * tf.reduce_mean((q_backup - q2_a)**2)
     value_loss = q1_loss + q2_loss
 
-    # kl using cross entropy (D_KL = H(P,Q) - H(P))
-    pi_action_probs    = tf.nn.softmax(pi_logits, axis=-1)
-    q_log_action_probs = tf.nn.log_softmax(min_q_logits, axis=-1)
-    pi_q_cross_entropy = -tf.reduce_sum(pi_action_probs * q_log_action_probs, axis=-1)
-    pi_loss = tf.reduce_mean(pi_q_cross_entropy - alpha*pi_entropy)
+    # policy loss
+    pi_backup = tf.reduce_sum(action_probs * ( alpha * log_action_probs - min_q_logits ), axis=-1, keepdims=True)
+    pi_loss = tf.reduce_mean(pi_backup)
 
     # alpha loss for temperature parameter
+    pi_entropy = -tf.reduce_sum(action_probs * log_action_probs, axis=-1)
     alpha_backup = tf.stop_gradient(target_entropy - pi_entropy)
     alpha_loss   = -tf.reduce_mean(log_alpha * alpha_backup)
 
@@ -163,7 +162,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
         return o, r, d, ep_ret, ep_len, old_lives, state
 
     def test_agent(n=10, render=True):
-        global sess, mu, pi, q1, q2, q1_pi, q2_pi
+        global sess, mu, pi, q1, q2
         for j in range(n):
             o, r, d, ep_ret, ep_len, test_old_lives, test_state = reset(test_env, test_state_buffer)
             terminal_life_lost_test = False
@@ -350,7 +349,7 @@ if __name__ == '__main__':
     }
 
     saved_model_dir = '../saved_models'
-    logger_kwargs = setup_logger_kwargs(exp_name='sac_discrete_kl_atari_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
+    logger_kwargs = setup_logger_kwargs(exp_name='sac_discrete_atari_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
 
     env = gym.make(rl_params['env_name'])
 

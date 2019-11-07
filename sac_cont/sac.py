@@ -135,7 +135,7 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
 
     # alpha loss for temperature parameter
     alpha_backup = tf.stop_gradient(logp_pi + target_entropy)
-    alpha_loss  = -tf.reduce_mean((log_alpha * alpha_backup))
+    alpha_loss  = -tf.reduce_mean(log_alpha * alpha_backup)
 
     # Policy train op
     # (has to be separate from value train op, because q1_pi appears in pi_loss)

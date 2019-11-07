@@ -2,8 +2,6 @@ import numpy as np
 import os
 import tensorflow as tf
 
-EPS = 1e-8
-
 def placeholder(dim=None):
     if isinstance(dim, (list,)):
         ph = tf.compat.v1.placeholder(dtype=tf.float32, shape=[None,*dim])
@@ -14,10 +12,6 @@ def placeholder(dim=None):
 def placeholders(*args):
     return [placeholder(dim) for dim in args]
 
-def mlp(x, hidden_sizes=(32,), activation=tf.tanh, output_activation=None):
-    for h in hidden_sizes[:-1]:
-        x = tf.layers.dense(x, units=h, activation=activation)
-    return tf.layers.dense(x, units=hidden_sizes[-1], activation=output_activation)
 
 def build_model(x,
                 concat_policy=None,
@@ -107,15 +101,6 @@ def count_vars(scope):
     v = get_vars(scope)
     return sum([np.prod(var.shape.as_list()) for var in v])
 
-def gaussian_likelihood(x, mu, log_std):
-    pre_sum = -0.5 * (((x-mu)/(tf.exp(log_std)+EPS))**2 + 2*log_std + np.log(2*np.pi))
-    return tf.reduce_sum(pre_sum, axis=1)
-
-def clip_but_pass_gradient(x, l=-1., u=1.):
-    clip_up = tf.cast(x > u, tf.float32)
-    clip_low = tf.cast(x < l, tf.float32)
-    return x + tf.stop_gradient((u - x)*clip_up + (l - x)*clip_low)
-
 
 def kl_policy(x, act_dim, network_params):
 
@@ -134,29 +119,21 @@ def kl_policy(x, act_dim, network_params):
     policy_dist = tf.distributions.Categorical(logits=logits)
     pi = policy_dist.sample()
 
-    # entropy over discrete actions
-    pi_entropy = -tf.reduce_sum(action_probs * log_action_probs, axis=-1)
-
-    onehot_pi = tf.one_hot(pi, depth=act_dim, axis=-1, dtype=tf.float32)
-
-    return mu, pi, onehot_pi, pi_entropy, logits
+    return mu, pi, action_probs, log_action_probs
 
 def build_models(x, a, act_dim, network_params):
 
     # policy
     with tf.variable_scope('pi'):
-        mu, pi, onehot_pi, pi_entropy, pi_logits = kl_policy(x, act_dim, network_params)
+        mu, pi, action_probs, log_action_probs = kl_policy(x, act_dim, network_params)
 
     # vfs
     with tf.variable_scope('q1'):
         q1_logits = build_model(x, concat_policy=None, output_dim=act_dim, **network_params)
         q1_a  = tf.reduce_sum(tf.multiply(q1_logits, a), axis=1)
-        q1_pi = tf.reduce_sum(tf.multiply(q1_logits, onehot_pi), axis=1)
 
     with tf.variable_scope('q2'):
         q2_logits = build_model(x, concat_policy=None, output_dim=act_dim, **network_params)
         q2_a  = tf.reduce_sum(tf.multiply(q2_logits, a), axis=1)
-        q2_pi = tf.reduce_sum(tf.multiply(q2_logits, onehot_pi), axis=1)
 
-
-    return mu, pi, pi_entropy, pi_logits, q1_logits, q2_logits, q1_a, q2_a, q1_pi, q2_pi
+    return mu, pi, action_probs, log_action_probs, q1_logits, q2_logits, q1_a, q2_a

@@ -2,13 +2,17 @@ import sys, os
 import numpy as np
 import time
 import gym
-
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import tensorflow as tf
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+from spinup.utils.logx import EpochLogger
 
 from core import *
-from spinup.utils.logx import EpochLogger
+
+# configure gpu use and supress tensorflow warnings
+gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.3)
+tf_config = tf.compat.v1.ConfigProto(gpu_options=gpu_options)
+tf_config.gpu_options.allow_growth = True
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
 
 class ReplayBuffer:
@@ -41,6 +45,21 @@ class ReplayBuffer:
                     rews=self.rews_buf[idxs],
                     done=self.done_buf[idxs])
 
+"""
+Store the observations in ring buffer type array of size m
+"""
+class StateBuffer:
+    def __init__(self,m):
+        self.m = m
+
+    def init_state(self, init_obs):
+        self.current_state = np.concatenate([init_obs]*self.m, axis=0)
+        return self.current_state
+
+    def append_state(self, obs):
+        new_state = np.concatenate( (self.current_state, obs), axis=0)
+        self.current_state = new_state[obs.shape[0]:]
+        return self.current_state
 
 def process_observation(o, obs_dim, observation_type):
     if observation_type == 'Discrete':
@@ -63,7 +82,7 @@ Soft Actor-Critic
 
 """
 
-def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
+def sac(env_fn, actor_critic=mlp_actor_critic,
                 logger_kwargs=dict(),
                 network_params=dict(),
                 rl_params=dict()):
@@ -71,27 +90,31 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
     logger = EpochLogger(**logger_kwargs)
     logger.save_config(locals())
 
-    seed            = rl_params['seed']
-    epochs          = rl_params['epochs']
-    steps_per_epoch = rl_params['steps_per_epoch']
-    replay_size     = rl_params['replay_size']
-    alpha           = rl_params['alpha']
-    target_entropy  = rl_params['target_entropy']
-    gamma           = rl_params['gamma']
-    polyak          = rl_params['polyak']
-    lr              = rl_params['lr']
-    batch_size      = rl_params['batch_size']
-    start_steps     = rl_params['start_steps']
-    max_ep_len      = rl_params['max_ep_len']
-    save_freq       = rl_params['save_freq']
-    render          = rl_params['render']
+    # control params
+    seed                = rl_params['seed']
+    epochs              = rl_params['epochs']
+    steps_per_epoch     = rl_params['steps_per_epoch']
+    replay_size         = rl_params['replay_size']
+    batch_size          = rl_params['batch_size']
+    start_steps         = rl_params['start_steps']
+    max_ep_len          = rl_params['max_ep_len']
+    save_freq           = rl_params['save_freq']
+    render              = rl_params['render']
+    # entropy params
+    alpha               = rl_params['alpha']
+    target_entropy      = rl_params['target_entropy']
+    # rl params
+    gamma               = rl_params['gamma']
+    polyak              = rl_params['polyak']
+    lr                  = rl_params['lr']
+    state_hist_n        = rl_params['state_hist_n']
 
     tf.set_random_seed(seed)
     np.random.seed(seed)
 
-    env, test_env = env_fn(), env_fn()
-    obs_space = env.observation_space
-    act_space = env.action_space
+    train_env, test_env = env_fn(), env_fn()
+    obs_space = train_env.observation_space
+    act_space = train_env.action_space
 
     try:
         obs_dim = obs_space.n
@@ -102,12 +125,19 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
 
     act_dim = act_space.n
 
+    # Experience buffer
+    replay_buffer = ReplayBuffer(obs_dim=obs_dim*state_hist_n, act_dim=act_dim, size=replay_size)
+
+    # init a state buffer for storing last m states
+    train_state_buffer = StateBuffer(m=state_hist_n)
+    test_state_buffer  = StateBuffer(m=state_hist_n)
+
     # Inputs to computation graph
-    x_ph, a_ph, x2_ph, r_ph, d_ph = placeholders(obs_dim, act_dim, obs_dim, None, None)
+    x_ph, a_ph, x2_ph, r_ph, d_ph = placeholders(obs_dim*state_hist_n, act_dim, obs_dim*state_hist_n, None, None)
 
     # alpha Params
     if target_entropy == 'auto': # discrete case should be target_entropy < ln(act_dim)
-        target_entropy = tf.log(tf.cast(act_dim, tf.float32)) * 0.5
+        target_entropy = tf.log(tf.cast(act_dim, tf.float32)) * 0.3
     else:
         target_entropy = tf.cast(target_entropy, tf.float32)
 
@@ -121,14 +151,11 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
 
     # Main outputs from computation graph
     with tf.variable_scope('main'):
-        mu, pi, pi_entropy, pi_logits, q1_logits, q2_logits, q1_a, q2_a, q1_pi, q2_pi = actor_critic(x_ph, a_ph, alpha, act_space, **network_params)
+        mu, pi, action_probs, log_action_probs, q1_logits, q2_logits, q1_a, q2_a = actor_critic(x_ph, a_ph, **network_params)
 
     # Target value network
     with tf.variable_scope('target'):
-        _, _, pi_entropy_targ, _, _, _,  _, _, q1_pi_targ, q2_pi_targ = actor_critic(x2_ph, a_ph, alpha, act_space, **network_params)
-
-    # Experience buffer
-    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
+        _, _, action_probs_targ, log_action_probs_targ, q1_logits_targ, q2_logits_targ,  _, _, = actor_critic(x2_ph, a_ph, **network_params)
 
     # Count variables
     var_counts = tuple(count_vars(scope) for scope in
@@ -137,39 +164,38 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
            'q1: %d, \t q2: %d, \t total: %d\n')%var_counts)
 
     # Min Double-Q:
-    min_q_logits  = tf.minimum(q1_logits, q2_logits)
-    min_q_pi_targ = tf.minimum(q1_pi_targ, q2_pi_targ)
+    min_q_logits       = tf.minimum(q1_logits, q2_logits)
+    min_q_logits_targ  = tf.minimum(q1_logits_targ, q2_logits_targ)
 
     # Targets for Q regression
-    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient(min_q_pi_targ + alpha * pi_entropy_targ)
+    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient( tf.reduce_sum(action_probs_targ * (min_q_logits_targ - alpha * log_action_probs_targ), axis=-1))
 
     # critic losses
     q1_loss = 0.5 * tf.reduce_mean((q_backup - q1_a)**2)
     q2_loss = 0.5 * tf.reduce_mean((q_backup - q2_a)**2)
     value_loss = q1_loss + q2_loss
 
-    # kl using cross entropy (D_KL = H(P,Q) - H(P))
-    pi_action_probs    = tf.nn.softmax(pi_logits, axis=-1)
-    q_log_action_probs = tf.nn.log_softmax(min_q_logits, axis=-1)
-    pi_q_cross_entropy = -tf.reduce_sum(pi_action_probs * q_log_action_probs, axis=-1)
-    pi_loss = tf.reduce_mean(pi_q_cross_entropy - alpha*pi_entropy)
+    # policy loss
+    pi_backup = tf.reduce_sum(action_probs * ( alpha * log_action_probs - min_q_logits ), axis=-1, keepdims=True)
+    pi_loss = tf.reduce_mean(pi_backup)
 
     # alpha loss for temperature parameter
+    pi_entropy = -tf.reduce_sum(action_probs * log_action_probs, axis=-1)
     alpha_backup = tf.stop_gradient(target_entropy - pi_entropy)
     alpha_loss   = -tf.reduce_mean(log_alpha * alpha_backup)
 
     # Policy train op
-    # (has to be separate from value train op, because q1_pi appears in pi_loss)
-    pi_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-08)
+    # (has to be separate from value train op, because q1_logits appears in pi_loss)
+    pi_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
     train_pi_op = pi_optimizer.minimize(pi_loss, var_list=get_vars('main/pi'))
 
     # Value train op
     # (control dep of train_pi_op because sess.run otherwise evaluates in nondeterministic order)
-    value_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-08)
+    value_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
     with tf.control_dependencies([train_pi_op]):
         train_value_op = value_optimizer.minimize(value_loss, var_list=get_vars('main/q'))
 
-    alpha_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-08)
+    alpha_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
     with tf.control_dependencies([train_value_op]):
         train_alpha_op = alpha_optimizer.minimize(alpha_loss, var_list=get_vars('log_alpha'))
 
@@ -201,11 +227,17 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
         act_op = mu if deterministic else pi
         return sess.run(act_op, feed_dict={x_ph: [o]})[0]
 
+    def reset(env, state_buffer):
+        o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+        o = process_observation(o, obs_dim, observation_type)
+        r = process_reward(r)
+        state = state_buffer.init_state(init_obs=o)
+        return o, r, d, ep_ret, ep_len, state
+
     def test_agent(n=10, render=True):
-        global sess, mu, pi, q1_a, q2_a, q1_pi, q2_pi
+        global sess, mu, pi, q1_a, q2_a
         for j in range(n):
-            o, r, d, ep_ret, ep_len = test_env.reset(), 0, False, 0, 0
-            o = process_observation(o, obs_dim, observation_type)
+            o, r, d, ep_ret, ep_len, test_state = reset(test_env, test_state_buffer)
 
             if render: test_env.render()
 
@@ -213,6 +245,8 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
                 # Take deterministic actions at test time
                 o, r, d, _ = test_env.step(get_action(o, True))
                 o = process_observation(o, obs_dim, observation_type)
+                r = process_reward(r)
+                test_state = test_state_buffer.append_state(o)
                 ep_ret += r
                 ep_len += 1
 
@@ -222,8 +256,7 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
 
     start_time = time.time()
-    o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
-    o = process_observation(o, obs_dim, observation_type)
+    o, r, d, ep_ret, ep_len, state = reset(train_env, train_state_buffer)
     total_steps = steps_per_epoch * epochs
 
     # Main loop: collect experience in env and update/log each epoch
@@ -236,12 +269,14 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
         if t > start_steps:
             a = get_action(o)
         else:
-            a = env.action_space.sample()
+            a = train_env.action_space.sample()
 
         # Step the env
-        o2, r, d, _ = env.step(a)
+        o2, r, d, _ = train_env.step(a)
         o2 = process_observation(o2, obs_dim, observation_type)
         a = process_action(a, act_dim)
+        r = process_reward(r)
+        next_state = train_state_buffer.append_state(o2)
         ep_ret += r
         ep_len += 1
 
@@ -280,8 +315,7 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
                              LossAlpha=outs[7], Alpha=outs[8])
 
             logger.store(EpRet=ep_ret, EpLen=ep_len)
-            o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
-            o = process_observation(o, obs_dim, observation_type)
+            o, r, d, ep_ret, ep_len, state = reset(train_env, train_state_buffer)
 
 
         # End of epoch wrap-up
@@ -290,7 +324,7 @@ def sac(env_fn, actor_critic=a_out_mlp_actor_critic,
 
             # Save model
             if (epoch % save_freq == 0) or (epoch == epochs-1):
-                logger.save_state({'env': env}, None)
+                logger.save_state({'env': train_env}, None)
 
             # Test the performance of the deterministic version of the agent.
             test_agent(n=10,render=render)
@@ -326,33 +360,42 @@ if __name__ == '__main__':
     }
 
     rl_params = {
-        'env_name':'FrozenLake-v0',
-        # 'env_name':'CartPole-v1',
+        # env params
+        # 'env_name':'FrozenLake-v0',
+        'env_name':'CartPole-v1',
         # 'env_name':'Taxi-v2',
         # 'env_name':'MountainCar-v0',
         # 'env_name':'Acrobot-v1',
         # 'env_name':'LunarLander-v2',
+
+        # control params
         'seed': int(123),
-        'epochs': int(300),
+        'epochs': int(50),
         'steps_per_epoch': 2000,
         'replay_size': 100000,
-        'alpha': 'auto',
-        'target_entropy':'auto', # fixed or auto define with act_dim
-        'gamma': 0.95,
-        'polyak': 0.995,
-        'lr': 1e-3,
-        'batch_size': 128,
+        'batch_size': 256,
         'start_steps': 4000,
         'max_ep_len': 500,
         'save_freq': 5,
-        'render': True
+        'render': False,
+
+        # rl params
+        'gamma': 0.99,
+        'polyak': 0.995,
+        'lr': 0.0003,
+        'state_hist_n': 1,
+
+        # entropy params
+        'alpha': 'auto',
+        'target_entropy':'auto' # fixed or auto define with act_dim
     }
 
+
     saved_model_dir = '../saved_models'
-    logger_kwargs = setup_logger_kwargs(exp_name='sac_discrete_kl_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
+    logger_kwargs = setup_logger_kwargs(exp_name='sac_discrete_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
     env = gym.make(rl_params['env_name'])
 
-    sac(lambda:env, actor_critic=a_out_mlp_actor_critic,
+    sac(lambda:env, actor_critic=mlp_actor_critic,
                     logger_kwargs=logger_kwargs,
                     network_params=network_params,
                     rl_params=rl_params)

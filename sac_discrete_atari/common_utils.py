@@ -34,7 +34,6 @@ class ReplayBuffer:
                     rews=self.rews_buf[idxs],
                     done=self.done_buf[idxs])
 
-
 """
 Store the observations in ring buffer type array of size m
 """
