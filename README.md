@@ -2,9 +2,9 @@
 
 ### Implentations of Soft Actor Critic (SAC) algorithms from:
 
-1: Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor, Haarnoja et al, 2018 https://arxiv.org/abs/1801.01290
+1. Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor, Haarnoja et al, 2018 https://arxiv.org/abs/1801.01290
 
-2: Soft Actor-Critic Algorithms and Applications, Haarnoja et al, 2019, https://arxiv.org/abs/1812.05905
+2. Soft Actor-Critic Algorithms and Applications, Haarnoja et al, 2019, https://arxiv.org/abs/1812.05905
 
 3. Soft Actor Critic for Discrete Action Settings, Petros Christodoulou, 2019, https://arxiv.org/abs/1910.07207
    (authors implementation here: https://github.com/p-christ/Deep-Reinforcement-Learning-Algorithms-with-PyTorch)
