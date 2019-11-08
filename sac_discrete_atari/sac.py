@@ -98,7 +98,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     min_q_logits_targ  = tf.minimum(q1_logits_targ, q2_logits_targ)
 
     # Targets for Q regression
-    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient( tf.reduce_sum(action_probs_targ * (min_q_logits_targ - alpha * log_action_probs_targ), axis=-1))
+    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient( tf.reduce_mean(action_probs_targ * (min_q_logits_targ - alpha * log_action_probs_targ), axis=-1))
 
     # critic losses
     q1_loss = 0.5 * tf.reduce_mean((q_backup - q1_a)**2)
@@ -106,7 +106,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     value_loss = q1_loss + q2_loss
 
     # policy loss
-    pi_backup = tf.reduce_sum(action_probs * ( alpha * log_action_probs - min_q_logits ), axis=-1, keepdims=True)
+    pi_backup = tf.reduce_mean(action_probs * ( alpha * log_action_probs - min_q_logits ), axis=-1, keepdims=True)
     pi_loss = tf.reduce_mean(pi_backup)
 
     # alpha loss for temperature parameter
@@ -116,16 +116,16 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
 
     # Policy train op
     # (has to be separate from value train op, because q1_pi appears in pi_loss)
-    pi_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-08)
+    pi_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
     train_pi_op = pi_optimizer.minimize(pi_loss, var_list=get_vars('main/pi'))
 
     # Value train op
-    value_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-08)
+    value_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
     with tf.control_dependencies([train_pi_op]):
         train_value_op = value_optimizer.minimize(value_loss, var_list=get_vars('main/q'))
 
     # Alpha train op
-    alpha_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-08)
+    alpha_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
     with tf.control_dependencies([train_value_op]):
         train_alpha_op = alpha_optimizer.minimize(alpha_loss, var_list=get_vars('log_alpha'))
 
@@ -350,7 +350,7 @@ if __name__ == '__main__':
 
         # control params
         'seed':int(0),
-        'epochs':int(100),
+        'epochs':int(250),
         'steps_per_epoch':10000,
         'replay_size':int(4e5),
         'batch_size':32,
@@ -358,7 +358,7 @@ if __name__ == '__main__':
         'max_ep_len':18000,
         'max_noop':10,
         'save_freq':5,
-        'render':True,
+        'render':False,
 
         # rl params
         'gamma':0.99,
@@ -369,7 +369,7 @@ if __name__ == '__main__':
         'alpha': 'auto',
         'target_entropy_start':1.0, # proportion of max_entropy
         'target_entropy_stop':0.4,
-        'target_entropy_steps':1e5,
+        'target_entropy_steps':1e6,
     }
 
 

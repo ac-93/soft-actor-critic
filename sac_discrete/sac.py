@@ -182,7 +182,7 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     min_q_logits_targ  = tf.minimum(q1_logits_targ, q2_logits_targ)
 
     # Targets for Q regression
-    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient( tf.reduce_sum(action_probs_targ * (min_q_logits_targ - alpha * log_action_probs_targ), axis=-1))
+    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient( tf.reduce_mean(action_probs_targ * (min_q_logits_targ - alpha * log_action_probs_targ), axis=-1))
 
     # critic losses
     q1_loss = 0.5 * tf.reduce_mean((q_backup - q1_a)**2)
@@ -190,7 +190,7 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     value_loss = q1_loss + q2_loss
 
     # policy loss
-    pi_backup = tf.reduce_sum(action_probs * ( alpha * log_action_probs - min_q_logits ), axis=-1, keepdims=True)
+    pi_backup = tf.reduce_mean(action_probs * ( alpha * log_action_probs - min_q_logits ), axis=-1, keepdims=True)
     pi_loss = tf.reduce_mean(pi_backup)
 
     # alpha loss for temperature parameter
@@ -390,7 +390,7 @@ if __name__ == '__main__':
         # 'env_name':'LunarLander-v2',
 
         # control params
-        'seed': int(123),
+        'seed': int(1234),
         'epochs': int(50),
         'steps_per_epoch': 2000,
         'replay_size': 100000,
