@@ -80,11 +80,12 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
 
     # Main outputs from computation graph
     with tf.variable_scope('main'):
-        mu, pi, logp_pi, pi_logits, q1_logits, q2_logits, q1_a, q2_a, q1_pi, q2_pi = build_models(x_ph, a_ph, act_dim, network_params)
+        mu, pi, action_probs, log_action_probs, q1_logits, q2_logits, q1_a, q2_a = build_models(x_ph, a_ph, act_dim, network_params)
 
     # Target value network
     with tf.variable_scope('target'):
-        _, _, logp_pi_targ, _, _, _,  _, _, q1_pi_targ, q2_pi_targ = build_models(x2_ph, a_ph, act_dim, network_params)
+        _, _, action_probs_targ, log_action_probs_targ, q1_logits_targ, q2_logits_targ,  _, _ = build_models(x2_ph, a_ph, act_dim, network_params)
+
 
     # Count variables
     var_counts = tuple(count_vars(scope) for scope in
@@ -92,37 +93,39 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     print(('\nNumber of parameters: \t alpha: %d, \t pi: %d, \t' + \
            'q1: %d, \t q2: %d, \t total: %d\n')%var_counts)
 
-    # Min Double-Q: (check the logp_pi bit)
-    min_q_pi = tf.minimum(q1_pi, q2_pi)
-    min_q_pi_targ = tf.minimum(q1_pi_targ, q2_pi_targ)
+    # Min Double-Q:
+    min_q_logits       = tf.minimum(q1_logits, q2_logits)
+    min_q_logits_targ  = tf.minimum(q1_logits_targ, q2_logits_targ)
 
     # Targets for Q regression
-    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient(min_q_pi_targ - alpha * logp_pi_targ)
+    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient( tf.reduce_mean(action_probs_targ * (min_q_logits_targ - alpha * log_action_probs_targ), axis=-1))
 
     # critic losses
     q1_loss = 0.5 * tf.reduce_mean((q_backup - q1_a)**2)
     q2_loss = 0.5 * tf.reduce_mean((q_backup - q2_a)**2)
     value_loss = q1_loss + q2_loss
 
-    # actor loss
-    pi_loss = tf.reduce_mean(alpha*logp_pi - min_q_pi)
+    # policy loss
+    pi_backup = tf.reduce_mean(action_probs * ( alpha * log_action_probs - min_q_logits ), axis=-1, keepdims=True)
+    pi_loss = tf.reduce_mean(pi_backup)
 
     # alpha loss for temperature parameter
-    alpha_backup = tf.stop_gradient(logp_pi + target_entropy)
+    pi_entropy = -tf.reduce_sum(action_probs * log_action_probs, axis=-1)
+    alpha_backup = tf.stop_gradient(target_entropy - pi_entropy)
     alpha_loss   = -tf.reduce_mean(log_alpha * alpha_backup)
 
     # Policy train op
     # (has to be separate from value train op, because q1_pi appears in pi_loss)
-    pi_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-08)
+    pi_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
     train_pi_op = pi_optimizer.minimize(pi_loss, var_list=get_vars('main/pi'))
 
     # Value train op
-    value_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-08)
+    value_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
     with tf.control_dependencies([train_pi_op]):
         train_value_op = value_optimizer.minimize(value_loss, var_list=get_vars('main/q'))
 
     # Alpha train op
-    alpha_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-08)
+    alpha_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
     with tf.control_dependencies([train_value_op]):
         train_alpha_op = alpha_optimizer.minimize(alpha_loss, var_list=get_vars('log_alpha'))
 
@@ -134,7 +137,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
 
     # All ops to call during one training step
     step_ops = [pi_loss, q1_loss, q2_loss, q1_a, q2_a,
-                logp_pi, target_entropy,
+                pi_entropy, target_entropy,
                 alpha_loss, alpha,
                 train_pi_op, train_value_op, train_alpha_op, target_update]
 
@@ -170,7 +173,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
         return o, r, d, ep_ret, ep_len, old_lives, state
 
     def test_agent(n=10, render=True):
-        global sess, mu, pi, q1, q2, q1_pi, q2_pi
+        global sess, mu, pi, q1, q2
         for j in range(n):
             o, r, d, ep_ret, ep_len, test_old_lives, test_state = reset(test_env, test_state_buffer)
             terminal_life_lost_test = False
@@ -276,7 +279,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
                 logger.store(LossPi=outs[0],
                              LossQ1=outs[1],    LossQ2=outs[2],
                              Q1Vals=outs[3],    Q2Vals=outs[4],
-                             LogPi=outs[5], TargEntropy=outs[6],
+                             PiEntropy=outs[5], TargEntropy=outs[6],
                              LossAlpha=outs[7], Alpha=outs[8])
 
             logger.store(EpRet=ep_ret, EpLen=ep_len)
@@ -298,7 +301,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
                     save_iter+=1
 
             # Test the performance of the deterministic version of the agent.
-            test_agent(n=5, render=render)
+            test_agent(n=10, render=render)
 
             # Log info about epoch
             logger.log_tabular('Epoch', epoch)
@@ -309,7 +312,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
             logger.log_tabular('TotalEnvInteracts', t)
             logger.log_tabular('Q1Vals', with_min_and_max=True)
             logger.log_tabular('Q2Vals', with_min_and_max=True)
-            logger.log_tabular('LogPi', average_only=True)
+            logger.log_tabular('PiEntropy', average_only=True)
             logger.log_tabular('TargEntropy', average_only=True)
             logger.log_tabular('Alpha', average_only=True)
             logger.log_tabular('LossPi', average_only=True)
@@ -347,7 +350,7 @@ if __name__ == '__main__':
 
         # control params
         'seed':int(0),
-        'epochs':int(100),
+        'epochs':int(250),
         'steps_per_epoch':10000,
         'replay_size':int(4e5),
         'batch_size':32,
@@ -355,7 +358,7 @@ if __name__ == '__main__':
         'max_ep_len':18000,
         'max_noop':10,
         'save_freq':5,
-        'render':True,
+        'render':False,
 
         # rl params
         'gamma':0.99,
@@ -366,11 +369,12 @@ if __name__ == '__main__':
         'alpha': 'auto',
         'target_entropy_start':1.0, # proportion of max_entropy
         'target_entropy_stop':0.4,
-        'target_entropy_steps':1e5,
+        'target_entropy_steps':1e6,
     }
 
-    saved_model_dir = '../saved_models'
-    logger_kwargs = setup_logger_kwargs(exp_name='sac_discrete_gb_atari_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
+
+    saved_model_dir = '../../saved_models'
+    logger_kwargs = setup_logger_kwargs(exp_name='sac_discrete_pc_atari_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
 
     env = gym.make(rl_params['env_name'])
 

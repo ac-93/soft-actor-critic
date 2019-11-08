@@ -5,15 +5,45 @@ import gym
 import tensorflow as tf
 from spinup.utils.logx import EpochLogger
 
-from common_utils import *
 from core import *
 
 # configure gpu use and supress tensorflow warnings
-gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.6)
+gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.3)
 tf_config = tf.compat.v1.ConfigProto(gpu_options=gpu_options)
 tf_config.gpu_options.allow_growth = True
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+
+
+class ReplayBuffer:
+    """
+    A simple FIFO experience replay buffer for SAC agents.
+    """
+
+    def __init__(self, obs_dim, act_dim, size):
+        self.obs1_buf = np.zeros([size, obs_dim], dtype=np.float32)
+        self.obs2_buf = np.zeros([size, obs_dim], dtype=np.float32)
+        self.acts_buf = np.zeros([size, act_dim], dtype=np.float32)
+        self.rews_buf = np.zeros(size, dtype=np.float32)
+        self.done_buf = np.zeros(size, dtype=np.float32)
+        self.ptr, self.size, self.max_size = 0, 0, size
+
+    def store(self, obs, act, rew, next_obs, done):
+        self.obs1_buf[self.ptr] = obs
+        self.obs2_buf[self.ptr] = next_obs
+        self.acts_buf[self.ptr] = act
+        self.rews_buf[self.ptr] = rew
+        self.done_buf[self.ptr] = done
+        self.ptr = (self.ptr+1) % self.max_size
+        self.size = min(self.size+1, self.max_size)
+
+    def sample_batch(self, batch_size=32):
+        idxs = np.random.randint(0, self.size, size=batch_size)
+        return dict(obs1=self.obs1_buf[idxs],
+                    obs2=self.obs2_buf[idxs],
+                    acts=self.acts_buf[idxs],
+                    rews=self.rews_buf[idxs],
+                    done=self.done_buf[idxs])
 
 """
 
@@ -22,59 +52,57 @@ Soft Actor-Critic
 (With slight variations that bring it closer to TD3)
 
 """
-def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
-
-    # set all the rl params
-    thresh          = rl_params['thresh']
-    seed            = rl_params['seed']
-    epochs          = rl_params['epochs']
-    steps_per_epoch = rl_params['steps_per_epoch']
-    replay_size     = rl_params['replay_size']
-    gamma           = rl_params['gamma']
-    polyak          = rl_params['polyak']
-    lr              = rl_params['lr']
-    alpha           = rl_params['alpha']
-    target_entropy  = rl_params['target_entropy']
-    batch_size      = rl_params['batch_size']
-    start_steps     = rl_params['start_steps']
-    max_ep_len      = rl_params['max_ep_len']
-    save_freq       = rl_params['save_freq']
-    render          = rl_params['render']
+def sac(env_fn, actor_critic=mlp_actor_critic,
+                logger_kwargs=dict(),
+                network_params=dict(),
+                rl_params=dict()):
 
     logger = EpochLogger(**logger_kwargs)
-    if save_freq is not None:
-        logger.save_config(locals())
+    logger.save_config(locals())
+
+    seed                = rl_params['seed']
+    epochs              = rl_params['epochs']
+    steps_per_epoch     = rl_params['steps_per_epoch']
+    replay_size         = rl_params['replay_size']
+    alpha               = rl_params['alpha']
+    target_entropy      = rl_params['target_entropy']
+    gamma               = rl_params['gamma']
+    polyak              = rl_params['polyak']
+    lr                  = rl_params['lr']
+    batch_size          = rl_params['batch_size']
+    start_steps         = rl_params['start_steps']
+    max_ep_len          = rl_params['max_ep_len']
+    save_freq           = rl_params['save_freq']
+    render              = rl_params['render']
+
 
     tf.set_random_seed(seed)
     np.random.seed(seed)
 
-    train_env, test_env = env_fn(), env_fn()
-    obs = train_env.observation_space
-    act = train_env.action_space
+    env, test_env = env_fn(), env_fn()
+    obs_dim = env.observation_space.shape[0]
+    act_dim = env.action_space.shape[0]
 
-    # get the size after resize
-    obs_dim = network_params['input_dims']
-    act_dim = act.shape[0]
+    # Action limit for clamping: critically, assumes all dimensions share the same bound!
+    act_limit = env.action_space.high[0]
 
-    # init a state buffer for storing last m states
-    train_state_buffer = StateBuffer(m=obs_dim[2])
-    test_state_buffer  = StateBuffer(m=obs_dim[2])
+    # Share information about action space with policy architecture
+    network_params['action_space'] = env.action_space
 
     # Inputs to computation graph
     x_ph, a_ph, x2_ph, r_ph, d_ph = placeholders(obs_dim, act_dim, obs_dim, None, None)
 
     # Main outputs from computation graph
     with tf.variable_scope('main'):
-        mu, pi, logp_pi, q1, q2, q1_pi, q2_pi = build_models(x_ph, a_ph, act, act_dim, network_params)
+        mu, pi, logp_pi, q1, q2, q1_pi, q2_pi = actor_critic(x_ph, a_ph, **network_params)
 
     # Target value network
     with tf.variable_scope('target'):
-        _, _, logp_pi_targ, _, _, q1_pi_targ, q2_pi_targ  = build_models(x2_ph, a_ph, act, act_dim, network_params)
+        _, _, logp_pi_targ, _, _, q1_pi_targ, q2_pi_targ = actor_critic(x2_ph, a_ph, **network_params)
 
     # alpha Params
     if target_entropy == 'auto':
         target_entropy = tf.cast(-act_dim, tf.float32)
-        # target_entropy = tf.cast(-np.log((1.0 / act_dim)) * 0.98, tf.float32)
     else:
         target_entropy = tf.cast(target_entropy, tf.float32)
 
@@ -84,9 +112,6 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
         alpha = tf.exp(log_alpha)
     else: # fixed alpha
         alpha = tf.get_variable('alpha', dtype=tf.float32, initializer=alpha)
-
-        # Experience buffer
-        replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
@@ -99,10 +124,10 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
 
     # Min Double-Q:
     min_q_pi = tf.minimum(q1_pi, q2_pi)
-    min_q_pi_targ = tf.minimum(q1_pi_targ, q2_pi_targ) - alpha * logp_pi_targ
+    min_q_pi_targ = tf.minimum(q1_pi_targ, q2_pi_targ) # - alpha * logp_pi_targ # logp_pi should be of state t+1 but not target policy network...
 
-    # Targets for Q and V regression
-    q_backup = tf.stop_gradient(r_ph + gamma*(1-d_ph)*min_q_pi_targ)
+    # Targets for Q regression
+    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient(min_q_pi_targ - alpha * logp_pi_targ)
 
     # critic losses
     q1_loss = 0.5 * tf.reduce_mean((q_backup - q1)**2)
@@ -114,7 +139,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
 
     # alpha loss for temperature parameter
     alpha_backup = tf.stop_gradient(logp_pi + target_entropy)
-    alpha_loss = -tf.reduce_mean((log_alpha * alpha_backup))
+    alpha_loss  = -tf.reduce_mean(log_alpha * alpha_backup)
 
     # Policy train op
     # (has to be separate from value train op, because q1_pi appears in pi_loss)
@@ -150,33 +175,23 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     sess.run(target_init)
 
     # Setup model saving
-    if save_freq is not None:
-        logger.setup_tf_saver(sess, inputs={'x': x_ph, 'a': a_ph},
-                                    outputs={'mu': mu, 'pi': pi, 'q1': q1, 'q2': q2})
+    logger.setup_tf_saver(sess, inputs={'x': x_ph, 'a': a_ph},
+                                outputs={'mu': mu, 'pi': pi, 'q1': q1, 'q2': q2})
 
-    def get_action(state, deterministic=False):
-        state = state.astype('float32') / 255.
+    def get_action(o, deterministic=False):
         act_op = mu if deterministic else pi
-        return sess.run(act_op, feed_dict={x_ph: [state]})[0]
-
-    def reset(env, state_buffer):
-        o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
-        o = process_image_observation(o, obs_dim, thresh)
-        state = state_buffer.init_state(init_obs=o)
-        return o, r, d, ep_ret, ep_len, state
+        return sess.run(act_op, feed_dict={x_ph: o.reshape(1,-1)})[0]
 
     def test_agent(n=10, render=True):
         global sess, mu, pi, q1, q2, q1_pi, q2_pi
         for j in range(n):
-            o, r, d, ep_ret, ep_len, test_state = reset(test_env, test_state_buffer)
+            o, r, d, ep_ret, ep_len = test_env.reset(), 0, False, 0, 0
 
             if render: test_env.render()
 
             while not(d or (ep_len == max_ep_len)):
                 # Take deterministic actions at test time
-                o, r, d, _ = test_env.step(get_action(test_state, True))
-                o = process_image_observation(o, obs_dim, thresh)
-                test_state = test_state_buffer.append_state(o)
+                o, r, d, _ = test_env.step(get_action(o, True))
                 ep_ret += r
                 ep_len += 1
 
@@ -186,9 +201,8 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
 
     start_time = time.time()
-    o, r, d, ep_ret, ep_len, state = reset(train_env, train_state_buffer)
+    o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
     total_steps = steps_per_epoch * epochs
-    save_iter = 0
 
     # Main loop: collect experience in env and update/log each epoch
     for t in range(total_steps):
@@ -199,16 +213,12 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
         use the learned policy.
         """
         if t > start_steps:
-            a = get_action(state)
+            a = get_action(o)
         else:
-            a = train_env.action_space.sample()
+            a = env.action_space.sample()
 
         # Step the env
-        o2, r, d, _ = train_env.step(a)
-        o2        = process_image_observation(o2, obs_dim, thresh)
-
-        next_state = train_state_buffer.append_state(o2)
-
+        o2, r, d, _ = env.step(a)
         ep_ret += r
         ep_len += 1
 
@@ -218,12 +228,11 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
         d = False if ep_len==max_ep_len else d
 
         # Store experience to replay buffer
-        replay_buffer.store(state, a, r, next_state, d)
+        replay_buffer.store(o, a, r, o2, d)
 
         # Super critical, easy to overlook step: make sure to update
         # most recent observation!
         o = o2
-        state = next_state
 
         if d or (ep_len == max_ep_len):
             """
@@ -240,12 +249,12 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
                              d_ph: batch['done'],
                             }
                 outs = sess.run(step_ops, feed_dict)
-                logger.store(LossPi=outs[0], LossQ1=outs[1], LossQ2=outs[2],
-                             Q1Vals=outs[3], Q2Vals=outs[4], LogPi=outs[5], TargEntropy=outs[6],
+                logger.store(LossPi=outs[0],    LossQ1=outs[1], LossQ2=outs[2],
+                             Q1Vals=outs[3],    Q2Vals=outs[4], LogPi=outs[5], TargEntropy=outs[6],
                              LossAlpha=outs[7], Alpha=outs[8])
 
             logger.store(EpRet=ep_ret, EpLen=ep_len)
-            o, r, d, ep_ret, ep_len, state = reset(train_env, train_state_buffer)
+            o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
 
 
         # End of epoch wrap-up
@@ -253,13 +262,11 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
             epoch = t // steps_per_epoch
 
             # Save model
-            if save_freq is not None:
-                if (epoch % save_freq == 0) or (epoch == epochs-1):
-                    logger.save_state({'env': train_env}, itr=save_iter)
-                    save_iter+=1
+            if (epoch % save_freq == 0) or (epoch == epochs-1):
+                logger.save_state({'env': env}, None)
 
             # Test the performance of the deterministic version of the agent.
-            test_agent(n=2, render=render)
+            test_agent(n=4, render=True)
 
             # Log info about epoch
             logger.log_tabular('Epoch', epoch)
@@ -285,44 +292,39 @@ if __name__ == '__main__':
 
     from spinup.utils.run_utils import setup_logger_kwargs
 
+    # Hyper Params
     network_params = {
-        'input_dims':[96,96,4],
-        'conv_filters':(16, 32),
-        'kernel_width':(8,4),
-        'strides':(4,2),
-        'pooling':'none',
-        'pooling_width':2,
-        'pooling_strides':1,
-        'dense_units':(512,),
-        'hidden_activation':'relu',
-        'output_activation':'linear',
-        'batch_norm':False,
-        'dropout':0.0
+        'hidden_sizes':[64, 64],
+        'activation':'relu',
+        'policy':mlp_gaussian_policy
     }
 
     rl_params = {
-        'env_name':'CarRacing-v0',
-        'thresh':False,
-        'seed':int(0),
-        'epochs':int(50),
-        'steps_per_epoch':5000,
-        'replay_size':int(1e5),
-        'gamma':0.99,
-        'polyak':0.995,
-        'lr':0.001,
-        'alpha': 'auto',         # fixed or auto balance
+        'env_name':'Pendulum-v0',
+        # 'env_name':'MountainCarContinuous-v0',
+        # 'env_name':'LunarLanderContinuous-v2',
+        'seed': int(123),
+        'epochs': int(50),
+        'actor_critic':mlp_actor_critic,
+        'steps_per_epoch': 5000,
+        'replay_size': int(1e5),
+        'alpha': 'auto',
         'target_entropy':'auto', # fixed or auto define with act_dim
-        'batch_size':64,
-        'start_steps':4000,
-        'max_ep_len':1000,
-        'save_freq':5,
-        'render':True,
+        'gamma': 0.99,
+        'polyak': 0.995,
+        'lr': 3e-4,
+        'batch_size': 128,
+        'start_steps': 10000,
+        'max_ep_len': 500,
+        'save_freq': 5,
+        'render': False
     }
 
-    saved_model_dir = '../saved_models'
-    logger_kwargs = setup_logger_kwargs(exp_name='sac_cont_image_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
-
+    saved_model_dir = '../../saved_models/'
+    logger_kwargs = setup_logger_kwargs(exp_name='sac_cont_' + rl_params['env_name'], seed=rl_params['seed'], data_dir=saved_model_dir, datestamp=False)
     env = gym.make(rl_params['env_name'])
 
-    sac(lambda:env, logger_kwargs=logger_kwargs,
-        network_params=network_params, rl_params=rl_params)
+    sac(lambda:env, actor_critic=rl_params['actor_critic'],
+                    logger_kwargs=logger_kwargs,
+                    network_params=network_params,
+                    rl_params=rl_params)
