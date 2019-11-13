@@ -46,6 +46,14 @@ class ReplayBuffer:
                     done=self.done_buf[idxs])
 
 """
+Clip gradient whilst handling None error
+"""
+def ClipIfNotNone(grad, grad_clip_val):
+    if grad is None:
+        return grad
+    return tf.clip_by_value(grad, -grad_clip_val, grad_clip_val)
+
+"""
 
 Soft Actor-Critic
 
@@ -60,20 +68,27 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     logger = EpochLogger(**logger_kwargs)
     logger.save_config(locals())
 
+    # control params
     seed                = rl_params['seed']
     epochs              = rl_params['epochs']
     steps_per_epoch     = rl_params['steps_per_epoch']
     replay_size         = rl_params['replay_size']
-    alpha               = rl_params['alpha']
-    target_entropy      = rl_params['target_entropy']
-    gamma               = rl_params['gamma']
-    polyak              = rl_params['polyak']
-    lr                  = rl_params['lr']
     batch_size          = rl_params['batch_size']
     start_steps         = rl_params['start_steps']
     max_ep_len          = rl_params['max_ep_len']
     save_freq           = rl_params['save_freq']
     render              = rl_params['render']
+
+    # rl params
+    gamma               = rl_params['gamma']
+    polyak              = rl_params['polyak']
+    lr                  = rl_params['lr']
+    grad_clip_val       = rl_params['grad_clip_val']
+
+    # entropy params
+    alpha               = rl_params['alpha']
+    target_entropy      = rl_params['target_entropy']
+
 
 
     tf.set_random_seed(seed)
@@ -142,17 +157,27 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     alpha_loss  = -tf.reduce_mean(log_alpha * alpha_backup)
 
     # Policy train op
-    # (has to be separate from value train op, because q1_pi appears in pi_loss)
-    pi_optimizer = tf.train.AdamOptimizer(learning_rate=lr)
-    train_pi_op = pi_optimizer.minimize(pi_loss, var_list=get_vars('main/pi'))
+    # (has to be separate from value train op, because q1_logits appears in pi_loss)
+    pi_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
+    if grad_clip_val is not None:
+        gvs = pi_optimizer.compute_gradients(pi_loss,  var_list=get_vars('main/pi'))
+        capped_gvs = [(ClipIfNotNone(grad, grad_clip_val), var) for grad, var in gvs]
+        train_pi_op = pi_optimizer.apply_gradients(capped_gvs)
+    else:
+        train_pi_op = pi_optimizer.minimize(pi_loss, var_list=get_vars('main/pi'))
 
     # Value train op
     # (control dep of train_pi_op because sess.run otherwise evaluates in nondeterministic order)
-    value_optimizer = tf.train.AdamOptimizer(learning_rate=lr)
+    value_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
     with tf.control_dependencies([train_pi_op]):
-        train_value_op = value_optimizer.minimize(value_loss, var_list=get_vars('main/q'))
+        if grad_clip_val is not None:
+            gvs = value_optimizer.compute_gradients(value_loss, var_list=get_vars('main/q'))
+            capped_gvs = [(ClipIfNotNone(grad, grad_clip_val), var) for grad, var in gvs]
+            train_value_op = value_optimizer.apply_gradients(capped_gvs)
+        else:
+            train_value_op = value_optimizer.minimize(value_loss, var_list=get_vars('main/q'))
 
-    alpha_optimizer = tf.train.AdamOptimizer(learning_rate=lr)
+    alpha_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
     with tf.control_dependencies([train_value_op]):
         train_alpha_op = alpha_optimizer.minimize(alpha_loss, var_list=get_vars('log_alpha'))
 
@@ -266,7 +291,7 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
                 logger.save_state({'env': env}, None)
 
             # Test the performance of the deterministic version of the agent.
-            test_agent(n=4, render=True)
+            test_agent(n=4, render=render)
 
             # Log info about epoch
             logger.log_tabular('Epoch', epoch)
@@ -300,24 +325,32 @@ if __name__ == '__main__':
     }
 
     rl_params = {
+        # env params
         'env_name':'Pendulum-v0',
         # 'env_name':'MountainCarContinuous-v0',
         # 'env_name':'LunarLanderContinuous-v2',
+
+        # control params
         'seed': int(123),
         'epochs': int(50),
         'actor_critic':mlp_actor_critic,
         'steps_per_epoch': 5000,
         'replay_size': int(1e5),
-        'alpha': 'auto',
-        'target_entropy':'auto', # fixed or auto define with act_dim
-        'gamma': 0.99,
-        'polyak': 0.995,
-        'lr': 3e-4,
-        'batch_size': 128,
+        'batch_size': 256,
         'start_steps': 10000,
         'max_ep_len': 500,
         'save_freq': 5,
-        'render': False
+        'render': False,
+
+        # rl params
+        'gamma': 0.99,
+        'polyak': 0.995,
+        'lr': 0.0003,
+        'grad_clip_val':None,
+
+        # entropy params
+        'alpha': 'auto',
+        'target_entropy':'auto' # fixed or auto define with -act_dim
     }
 
     saved_model_dir = '../../saved_models/'

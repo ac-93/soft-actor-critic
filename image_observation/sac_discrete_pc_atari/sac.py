@@ -106,7 +106,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     value_loss = q1_loss + q2_loss
 
     # policy loss
-    pi_backup = tf.reduce_mean(action_probs * ( alpha * log_action_probs - min_q_logits ), axis=-1, keepdims=True)
+    pi_backup = tf.reduce_mean(action_probs * ( alpha * log_action_probs - min_q_logits ), axis=-1)
     pi_loss = tf.reduce_mean(pi_backup)
 
     # alpha loss for temperature parameter
@@ -115,14 +115,25 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     alpha_loss   = -tf.reduce_mean(log_alpha * alpha_backup)
 
     # Policy train op
-    # (has to be separate from value train op, because q1_pi appears in pi_loss)
+    # (has to be separate from value train op, because q1_logits appears in pi_loss)
     pi_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
-    train_pi_op = pi_optimizer.minimize(pi_loss, var_list=get_vars('main/pi'))
+    if grad_clip_val is not None:
+        gvs = pi_optimizer.compute_gradients(pi_loss,  var_list=get_vars('main/pi'))
+        capped_gvs = [(ClipIfNotNone(grad, grad_clip_val), var) for grad, var in gvs]
+        train_pi_op = pi_optimizer.apply_gradients(capped_gvs)
+    else:
+        train_pi_op = pi_optimizer.minimize(pi_loss, var_list=get_vars('main/pi'))
 
     # Value train op
+    # (control dep of train_pi_op because sess.run otherwise evaluates in nondeterministic order)
     value_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
     with tf.control_dependencies([train_pi_op]):
-        train_value_op = value_optimizer.minimize(value_loss, var_list=get_vars('main/q'))
+        if grad_clip_val is not None:
+            gvs = value_optimizer.compute_gradients(value_loss, var_list=get_vars('main/q'))
+            capped_gvs = [(ClipIfNotNone(grad, grad_clip_val), var) for grad, var in gvs]
+            train_value_op = value_optimizer.apply_gradients(capped_gvs)
+        else:
+            train_value_op = value_optimizer.minimize(value_loss, var_list=get_vars('main/q'))
 
     # Alpha train op
     alpha_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
@@ -349,7 +360,7 @@ if __name__ == '__main__':
         'thresh':True,
 
         # control params
-        'seed':int(0),
+        'seed':int(1),
         'epochs':int(250),
         'steps_per_epoch':10000,
         'replay_size':int(4e5),
@@ -364,11 +375,12 @@ if __name__ == '__main__':
         'gamma':0.99,
         'polyak':0.995,
         'lr':0.00025,
+        'grad_clip_val':None,
 
         # entropy params
         'alpha': 'auto',
-        'target_entropy_start':1.0, # proportion of max_entropy
-        'target_entropy_stop':0.4,
+        'target_entropy_start':0.5, # proportion of max_entropy
+        'target_entropy_stop':0.5,
         'target_entropy_steps':1e6,
     }
 

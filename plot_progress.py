@@ -11,7 +11,7 @@ def plot_error_band(axs, x_data, y_data, min, max, data_name, colour='b'):
     axs.plot(x_data, y_data, color=colour)
     # axs.fill_between(x_data, lower_bound, upper_bound, color=colour, alpha=0.5)
     axs.set(xlabel='Epoch', ylabel=data_name)
-    axs.set_ylim([np.min(min) - 0.5, np.max(max) + 0.5])
+    # axs.set_ylim([np.min(min) - 0.5, np.max(max) + 0.5])
     for item in ([axs.title, axs.xaxis.label, axs.yaxis.label] +
               axs.get_xticklabels() + axs.get_yticklabels()):
         item.set_fontsize(20)
@@ -24,11 +24,16 @@ def plot_progress(progess_file):
 
     plot_error_band(axs[0], data['Epoch'], data['AverageEpRet'],        data['MinEpRet'],     data['MaxEpRet'],     'Episode Return',          colour='r' )
     plot_error_band(axs[1], data['Epoch'], data['AverageTestEpRet'],    data['MinTestEpRet'], data['MaxTestEpRet'], 'Test Episode Return',     colour='b' )
+    # plot_error_band(axs[0], data['Epoch'], data['AverageQ1Vals'],        data['MinEpRet'],     data['MaxEpRet'],     'Episode Return',          colour='r' )
+    # plot_error_band(axs[1], data['Epoch'], data['AverageQ2Vals'],    data['MinTestEpRet'], data['MaxTestEpRet'], 'Test Episode Return',     colour='b' )
 
     plt.show()
     fig.savefig(os.path.join(os.path.dirname(progess_file), 'training_curves.png'), dpi=320, pad_inches=0.01, bbox_inches='tight')
+    # fig.savefig(os.path.join(os.path.dirname(progess_file), 'q_vals.png'), dpi=320, pad_inches=0.01, bbox_inches='tight')
 
 
 if __name__ == '__main__':
-    progess_file = '/saved_models/sac_discrete_kl_CartPole-v1/sac_discrete_kl_CartPole-v1_s123/progress.txt'
+    # progess_file = 'saved_models/sac_discrete_kl_CartPole-v1/sac_discrete_kl_CartPole-v1_s1/progress.txt'
+    # progess_file = 'saved_models/sac_discrete_kl_CartPole-v1/sac_discrete_kl_CartPole-v1_s2/progress.txt'
+    progess_file = 'saved_models/sac_discrete_kl_CartPole-v1/sac_discrete_kl_CartPole-v1_s3/progress.txt'
     plot_progress(progess_file)

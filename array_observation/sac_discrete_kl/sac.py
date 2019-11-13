@@ -88,6 +88,14 @@ def linear_anneal(current_step, start=0.1, stop=1.0, steps=1e6):
     return eps
 
 """
+Clip gradient whilst handling None error
+"""
+def ClipIfNotNone(grad, grad_clip_val):
+    if grad is None:
+        return grad
+    return tf.clip_by_value(grad, -grad_clip_val, grad_clip_val)
+
+"""
 
 Discrete Soft Actor-Critic
 
@@ -118,6 +126,7 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     polyak              = rl_params['polyak']
     lr                  = rl_params['lr']
     state_hist_n        = rl_params['state_hist_n']
+    grad_clip_val       = rl_params['grad_clip_val']
 
     # entropy params
     alpha                = rl_params['alpha']
@@ -201,13 +210,23 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     # Policy train op
     # (has to be separate from value train op, because q1_logits appears in pi_loss)
     pi_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
-    train_pi_op = pi_optimizer.minimize(pi_loss, var_list=get_vars('main/pi'))
+    if grad_clip_val is not None:
+        gvs = pi_optimizer.compute_gradients(pi_loss,  var_list=get_vars('main/pi'))
+        capped_gvs = [(ClipIfNotNone(grad, grad_clip_val), var) for grad, var in gvs]
+        train_pi_op = pi_optimizer.apply_gradients(capped_gvs)
+    else:
+        train_pi_op = pi_optimizer.minimize(pi_loss, var_list=get_vars('main/pi'))
 
     # Value train op
     # (control dep of train_pi_op because sess.run otherwise evaluates in nondeterministic order)
     value_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
     with tf.control_dependencies([train_pi_op]):
-        train_value_op = value_optimizer.minimize(value_loss, var_list=get_vars('main/q'))
+        if grad_clip_val is not None:
+            gvs = value_optimizer.compute_gradients(value_loss, var_list=get_vars('main/q'))
+            capped_gvs = [(ClipIfNotNone(grad, grad_clip_val), var) for grad, var in gvs]
+            train_value_op = value_optimizer.apply_gradients(capped_gvs)
+        else:
+            train_value_op = value_optimizer.minimize(value_loss, var_list=get_vars('main/q'))
 
     alpha_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
     with tf.control_dependencies([train_value_op]):
@@ -390,7 +409,7 @@ if __name__ == '__main__':
         # 'env_name':'LunarLander-v2',
 
         # control params
-        'seed': int(1234),
+        'seed': int(3),
         'epochs': int(50),
         'steps_per_epoch': 2000,
         'replay_size': 100000,
@@ -404,7 +423,8 @@ if __name__ == '__main__':
         'gamma': 0.99,
         'polyak': 0.995,
         'lr': 0.0003,
-        'state_hist_n': 4,
+        'state_hist_n': 1,
+        'grad_clip_val':None,
 
         # entropy params
         'alpha': 'auto',

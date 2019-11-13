@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+import tensorflow as tf
 
 class ReplayBuffer:
     """
@@ -10,7 +11,7 @@ class ReplayBuffer:
         self.obs_dim = obs_dim
         self.obs1_buf = np.zeros([size, *obs_dim], dtype=np.uint8)
         self.obs2_buf = np.zeros([size, *obs_dim], dtype=np.uint8)
-        self.acts_buf = np.zeros([size, act_dim], dtype=np.uint8)
+        self.acts_buf = np.zeros([size, act_dim], dtype=np.float32)
         self.rews_buf = np.zeros(size, dtype=np.float32)
         self.done_buf = np.zeros(size, dtype=np.float32)
         self.ptr, self.size, self.max_size = 0, 0, size
@@ -111,3 +112,11 @@ Process the reward by clipping as per mnih et al
 def process_reward(reward):
     return reward
     # return np.clip(reward, -1., 1.)
+
+"""
+Clip gradient whilst handling None error
+"""
+def ClipIfNotNone(grad, grad_clip_val):
+    if grad is None:
+        return grad
+    return tf.clip_by_value(grad, -grad_clip_val, grad_clip_val)

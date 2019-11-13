@@ -1,6 +1,7 @@
 import numpy as np
 import cv2
 import time
+import tensorflow as tf
 
 class ReplayBuffer:
     """
@@ -109,3 +110,11 @@ Process the reward by clipping as per mnih et al
 """
 def process_reward(reward):
     return np.clip(reward, -1., 1.)
+
+"""
+Clip gradient whilst handling None error
+"""
+def ClipIfNotNone(grad, grad_clip_val):
+    if grad is None:
+        return grad
+    return tf.clip_by_value(grad, -grad_clip_val, grad_clip_val)

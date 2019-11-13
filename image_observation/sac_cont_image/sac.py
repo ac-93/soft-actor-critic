@@ -24,22 +24,29 @@ Soft Actor-Critic
 """
 def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
 
-    # set all the rl params
+    # env params
     thresh          = rl_params['thresh']
+
+    # control params
     seed            = rl_params['seed']
     epochs          = rl_params['epochs']
     steps_per_epoch = rl_params['steps_per_epoch']
     replay_size     = rl_params['replay_size']
-    gamma           = rl_params['gamma']
-    polyak          = rl_params['polyak']
-    lr              = rl_params['lr']
-    alpha           = rl_params['alpha']
-    target_entropy  = rl_params['target_entropy']
     batch_size      = rl_params['batch_size']
     start_steps     = rl_params['start_steps']
     max_ep_len      = rl_params['max_ep_len']
     save_freq       = rl_params['save_freq']
     render          = rl_params['render']
+
+    # rl params
+    gamma           = rl_params['gamma']
+    polyak          = rl_params['polyak']
+    lr              = rl_params['lr']
+    grad_clip_val       = rl_params['grad_clip_val']
+
+    # entropy params
+    alpha           = rl_params['alpha']
+    target_entropy  = rl_params['target_entropy']
 
     logger = EpochLogger(**logger_kwargs)
     if save_freq is not None:
@@ -74,7 +81,6 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     # alpha Params
     if target_entropy == 'auto':
         target_entropy = tf.cast(-act_dim, tf.float32)
-        # target_entropy = tf.cast(-np.log((1.0 / act_dim)) * 0.98, tf.float32)
     else:
         target_entropy = tf.cast(target_entropy, tf.float32)
 
@@ -84,9 +90,6 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
         alpha = tf.exp(log_alpha)
     else: # fixed alpha
         alpha = tf.get_variable('alpha', dtype=tf.float32, initializer=alpha)
-
-        # Experience buffer
-        replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
@@ -117,17 +120,25 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     alpha_loss = -tf.reduce_mean((log_alpha * alpha_backup))
 
     # Policy train op
-    # (has to be separate from value train op, because q1_pi appears in pi_loss)
-    pi_optimizer = tf.train.AdamOptimizer(learning_rate=lr)
-    train_pi_op = pi_optimizer.minimize(pi_loss, var_list=get_vars('main/pi'))
+    pi_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
+    if grad_clip_val is not None:
+        gvs = pi_optimizer.compute_gradients(pi_loss,  var_list=get_vars('main/pi'))
+        capped_gvs = [(ClipIfNotNone(grad, grad_clip_val), var) for grad, var in gvs]
+        train_pi_op = pi_optimizer.apply_gradients(capped_gvs)
+    else:
+        train_pi_op = pi_optimizer.minimize(pi_loss, var_list=get_vars('main/pi'))
 
     # Value train op
-    # (control dep of train_pi_op because sess.run otherwise evaluates in nondeterministic order)
-    value_optimizer = tf.train.AdamOptimizer(learning_rate=lr)
+    value_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
     with tf.control_dependencies([train_pi_op]):
-        train_value_op = value_optimizer.minimize(value_loss, var_list=get_vars('main/q'))
+        if grad_clip_val is not None:
+            gvs = value_optimizer.compute_gradients(value_loss, var_list=get_vars('main/q'))
+            capped_gvs = [(ClipIfNotNone(grad, grad_clip_val), var) for grad, var in gvs]
+            train_value_op = value_optimizer.apply_gradients(capped_gvs)
+        else:
+            train_value_op = value_optimizer.minimize(value_loss, var_list=get_vars('main/q'))
 
-    alpha_optimizer = tf.train.AdamOptimizer(learning_rate=lr)
+    alpha_optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-04)
     with tf.control_dependencies([train_value_op]):
         train_alpha_op = alpha_optimizer.minimize(alpha_loss, var_list=get_vars('log_alpha'))
 
@@ -301,22 +312,30 @@ if __name__ == '__main__':
     }
 
     rl_params = {
+        # env params
         'env_name':'CarRacing-v0',
         'thresh':False,
+
+        # control params
         'seed':int(0),
         'epochs':int(50),
         'steps_per_epoch':5000,
         'replay_size':int(1e5),
-        'gamma':0.99,
-        'polyak':0.995,
-        'lr':0.001,
-        'alpha': 'auto',         # fixed or auto balance
-        'target_entropy':'auto', # fixed or auto define with act_dim
         'batch_size':64,
         'start_steps':4000,
         'max_ep_len':1000,
         'save_freq':5,
         'render':True,
+
+        # rl params
+        'gamma':0.99,
+        'polyak':0.995,
+        'lr':0.001,
+        'grad_clip_val':None,
+
+        # entropy params
+        'alpha': 'auto',         # fixed or auto balance
+        'target_entropy':'auto', # fixed or auto define with act_dim
     }
 
     saved_model_dir = '../../saved_models'
