@@ -39,6 +39,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     gamma           = rl_params['gamma']
     polyak          = rl_params['polyak']
     lr              = rl_params['lr']
+    grad_clip_val   = rl_params['grad_clip_val']
 
     alpha                = rl_params['alpha']
     target_entropy_start = rl_params['target_entropy_start']
@@ -98,7 +99,8 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     min_q_logits_targ  = tf.minimum(q1_logits_targ, q2_logits_targ)
 
     # Targets for Q regression
-    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient( tf.reduce_mean(action_probs_targ * (min_q_logits_targ - alpha * log_action_probs_targ), axis=-1))
+    # q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient( tf.reduce_mean(action_probs_targ * (min_q_logits_targ - alpha * log_action_probs_targ), axis=-1))
+    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient( tf.reduce_sum(action_probs_targ * (min_q_logits_targ - alpha * log_action_probs_targ), axis=-1))
 
     # critic losses
     q1_loss = 0.5 * tf.reduce_mean((q_backup - q1_a)**2)
@@ -106,7 +108,8 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     value_loss = q1_loss + q2_loss
 
     # policy loss
-    pi_backup = tf.reduce_mean(action_probs * ( alpha * log_action_probs - min_q_logits ), axis=-1)
+    # pi_backup = tf.reduce_mean(action_probs * ( alpha * log_action_probs - min_q_logits ), axis=-1)
+    pi_backup = tf.reduce_sum(action_probs * ( alpha * log_action_probs - min_q_logits ), axis=-1)
     pi_loss = tf.reduce_mean(pi_backup)
 
     # alpha loss for temperature parameter
@@ -360,7 +363,7 @@ if __name__ == '__main__':
         'thresh':True,
 
         # control params
-        'seed':int(1),
+        'seed':int(2),
         'epochs':int(250),
         'steps_per_epoch':10000,
         'replay_size':int(4e5),

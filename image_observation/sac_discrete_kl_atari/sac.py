@@ -39,6 +39,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     gamma           = rl_params['gamma']
     polyak          = rl_params['polyak']
     lr              = rl_params['lr']
+    grad_clip_val   = rl_params['grad_clip_val']
 
     alpha                = rl_params['alpha']
     target_entropy_start = rl_params['target_entropy_start']
@@ -355,9 +356,9 @@ if __name__ == '__main__':
 
     rl_params = {
         # env params
-        # 'env_name':'BreakoutDeterministic-v4',
-        'env_name':'PongDeterministic-v4',
-        'thresh':False,
+        'env_name':'BreakoutDeterministic-v4',
+        # 'env_name':'PongDeterministic-v4',
+        'thresh':True,
 
         # control params
         'seed':int(2),
@@ -375,7 +376,7 @@ if __name__ == '__main__':
         'gamma':0.99,
         'polyak':0.995,
         'lr':0.00025,
-        'grad_clip_val':None,
+        'grad_clip_val':1.0,
 
         # entropy params
         'alpha': 'auto',
