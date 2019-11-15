@@ -13,13 +13,12 @@
 
 https://spinningup.openai.com/en/latest/algorithms/sac.html
 
-Two different methods given for using SAC with discrete action spaces. 
+### Different approaches for discrete setting
+
+Three different methods given for using SAC with discrete action spaces. 
 
 * sac_discrete_gb uses the Gumbel Softmax distribtuion to reparameterize the discrete action space. This keeps algorithm similar to the original SAC implementation for continuous action spaces.
    
-* sac_discrete avoids reparmeterisation and calculates the entropy and KL divergence from the discrete actions given by the policy network.
+* sac_discrete_kl and sac_discrete_pc are similar, both avoid reparmeterisation and calculate the entropy and KL divergence from the discrete actions given by the policy network. sac_discrete_pc is based on the method described in [3] and is most accurate to the original SAC papers, I also find best results with this method.
    
-Versions of the continuous and discrete algorithms that work with image observations such as the atari
-gym environments are under sac_cont_image, sac_discrete_atari and sac_discrete_gb_atari.
-
-I've not yet done too much testing so it is possible that there are some problems with the implementations...
+Versions of the algorithms that work with image observations such as the atari gym environments are in the image observation directory.
