@@ -245,7 +245,7 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
     target_init = tf.group([tf.assign(v_targ, v_main)
                               for v_main, v_targ in zip(get_vars('main'), get_vars('target'))])
 
-    sess = tf.Session()
+    sess = tf.Session(config=tf_config)
     sess.run(tf.global_variables_initializer())
     sess.run(target_init)
 

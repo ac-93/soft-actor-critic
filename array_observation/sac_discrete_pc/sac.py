@@ -179,7 +179,7 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
 
     # Target value network
     with tf.variable_scope('target'):
-        _, _, action_probs_targ, log_action_probs_targ, q1_logits_targ, q2_logits_targ,  _, _ = actor_critic(x2_ph, a_ph, **network_params)
+        _, _, action_probs_targ, log_action_probs_targ, q1_logits_targ, q2_logits_targ, _, _ = actor_critic(x2_ph, a_ph, **network_params)
 
     # Count variables
     var_counts = tuple(count_vars(scope) for scope in
@@ -192,8 +192,8 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     min_q_logits_targ  = tf.minimum(q1_logits_targ, q2_logits_targ)
 
     # Targets for Q regression
-    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient( tf.reduce_mean(action_probs_targ * (min_q_logits_targ - alpha * log_action_probs_targ), axis=-1))
-    # q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient( tf.reduce_sum(action_probs_targ * (min_q_logits_targ - alpha * log_action_probs_targ), axis=-1))
+    # q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient( tf.reduce_mean(action_probs_targ * (min_q_logits_targ - alpha * log_action_probs_targ), axis=-1))
+    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient( tf.reduce_sum(action_probs_targ * (min_q_logits_targ - alpha * log_action_probs_targ), axis=-1))
 
     # critic losses
     q1_loss = 0.5 * tf.reduce_mean((q_backup - q1_a)**2)
@@ -201,8 +201,8 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     value_loss = q1_loss + q2_loss
 
     # policy loss
-    pi_backup = tf.reduce_mean(action_probs * ( alpha * log_action_probs - min_q_logits ), axis=-1)
-    # pi_backup = tf.reduce_sum(action_probs * ( alpha * log_action_probs - min_q_logits ), axis=-1)
+    # pi_backup = tf.reduce_mean(action_probs * ( alpha * log_action_probs - min_q_logits ), axis=-1)
+    pi_backup = tf.reduce_sum(action_probs * ( alpha * log_action_probs - min_q_logits ), axis=-1)
     pi_loss = tf.reduce_mean(pi_backup)
 
     # alpha loss for temperature parameter
@@ -251,7 +251,7 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     target_init = tf.group([tf.assign(v_targ, v_main)
                               for v_main, v_targ in zip(get_vars('main'), get_vars('target'))])
 
-    sess = tf.Session()
+    sess = tf.Session(config=tf_config)
     sess.run(tf.global_variables_initializer())
     sess.run(target_init)
 

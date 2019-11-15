@@ -195,7 +195,7 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     target_init = tf.group([tf.assign(v_targ, v_main)
                               for v_main, v_targ in zip(get_vars('main'), get_vars('target'))])
 
-    sess = tf.Session()
+    sess = tf.Session(config=tf_config)
     sess.run(tf.global_variables_initializer())
     sess.run(target_init)
 
@@ -326,12 +326,12 @@ if __name__ == '__main__':
 
     rl_params = {
         # env params
-        'env_name':'Pendulum-v0',
-        # 'env_name':'MountainCarContinuous-v0',
+        # 'env_name':'Pendulum-v0',
+        'env_name':'MountainCarContinuous-v0',
         # 'env_name':'LunarLanderContinuous-v2',
 
         # control params
-        'seed': int(123),
+        'seed': int(1),
         'epochs': int(50),
         'actor_critic':mlp_actor_critic,
         'steps_per_epoch': 5000,
@@ -345,7 +345,7 @@ if __name__ == '__main__':
         # rl params
         'gamma': 0.99,
         'polyak': 0.995,
-        'lr': 0.0003,
+        'lr': 0.01,
         'grad_clip_val':None,
 
         # entropy params

@@ -99,6 +99,6 @@ def load_and_test_model(model_dir, model_save_name):
 
 if __name__ == '__main__':
     # model_dir = 'saved_models/sac_discrete_kl_atari_BreakoutDeterministic-v4/sac_discrete_kl_atari_BreakoutDeterministic-v4_s1/'
-    model_dir = 'saved_models/sac_discrete_pc_atari_BreakoutDeterministic-v4/sac_discrete_pc_atari_BreakoutDeterministic-v4_s1/'
-    model_save_name = 'simple_save46'
+    model_dir = 'saved_models/sac_discrete_pc_atari_BreakoutDeterministic-v4/sac_discrete_pc_atari_BreakoutDeterministic-v4_s2/'
+    model_save_name = 'simple_save48'
     load_and_test_model(model_dir, model_save_name)
