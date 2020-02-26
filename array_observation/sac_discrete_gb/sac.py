@@ -133,14 +133,16 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
     target_entropy_stop  = rl_params['target_entropy_stop']
     target_entropy_steps = rl_params['target_entropy_steps']
 
-    tf.set_random_seed(seed)
-    np.random.seed(seed)
-    env.seed(seed)
-    env.action_space.np_random.seed(seed)
-
     train_env, test_env = env_fn(), env_fn()
     obs = train_env.observation_space
     act = train_env.action_space
+
+    tf.set_random_seed(seed)
+    np.random.seed(seed)
+    train_env.seed(seed)
+    train_env.action_space.np_random.seed(seed)
+    test_env.seed(seed)
+    test_env.action_space.np_random.seed(seed)
 
     try:
         obs_dim  = obs.n

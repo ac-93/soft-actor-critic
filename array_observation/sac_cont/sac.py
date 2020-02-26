@@ -89,20 +89,22 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     alpha               = rl_params['alpha']
     target_entropy      = rl_params['target_entropy']
 
+    train_env, test_env = env_fn(), env_fn()
+    obs_dim = train_env.observation_space.shape[0]
+    act_dim = train_env.action_space.shape[0]
+
     tf.set_random_seed(seed)
     np.random.seed(seed)
-    env.seed(seed)
-    env.action_space.np_random.seed(seed)
-
-    env, test_env = env_fn(), env_fn()
-    obs_dim = env.observation_space.shape[0]
-    act_dim = env.action_space.shape[0]
+    train_env.seed(seed)
+    train_env.action_space.np_random.seed(seed)
+    test_env.seed(seed)
+    test_env.action_space.np_random.seed(seed)
 
     # Action limit for clamping: critically, assumes all dimensions share the same bound!
-    act_limit = env.action_space.high[0]
+    act_limit = train_env.action_space.high[0]
 
     # Share information about action space with policy architecture
-    network_params['action_space'] = env.action_space
+    network_params['action_space'] = train_env.action_space
 
     # Experience buffer
     replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
@@ -239,7 +241,7 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
 
     start_time = time.time()
-    o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+    o, r, d, ep_ret, ep_len = train_env.reset(), 0, False, 0, 0
     total_steps = steps_per_epoch * epochs
 
     # Main loop: collect experience in env and update/log each epoch
@@ -253,10 +255,10 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
         if t > start_steps:
             a = get_action(o)
         else:
-            a = env.action_space.sample()
+            a = train_env.action_space.sample()
 
         # Step the env
-        o2, r, d, _ = env.step(a)
+        o2, r, d, _ = train_env.step(a)
         ep_ret += r
         ep_len += 1
 
@@ -292,7 +294,7 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
                              LossAlpha=outs[7], Alpha=outs[8])
 
             logger.store(EpRet=ep_ret, EpLen=ep_len)
-            o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+            o, r, d, ep_ret, ep_len = train_env.reset(), 0, False, 0, 0
 
 
         # End of epoch wrap-up
@@ -301,7 +303,7 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
 
             # Save model
             if (epoch % save_freq == 0) or (epoch == epochs-1):
-                logger.save_state({'env': env}, None)
+                logger.save_state({'env': train_env}, None)
 
             # Test the performance of the deterministic version of the agent.
             test_agent(n=4, render=render)

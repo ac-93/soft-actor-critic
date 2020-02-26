@@ -52,14 +52,16 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
     if save_freq is not None:
         logger.save_config(locals())
 
-    tf.set_random_seed(seed)
-    np.random.seed(seed)
-    env.seed(seed)
-    env.action_space.np_random.seed(seed)
-
     train_env, test_env = env_fn(), env_fn()
     obs = train_env.observation_space
     act = train_env.action_space
+
+    tf.set_random_seed(seed)
+    np.random.seed(seed)
+    train_env.seed(seed)
+    train_env.action_space.np_random.seed(seed)
+    test_env.seed(seed)
+    test_env.action_space.np_random.seed(seed)
 
     # get the size after resize
     obs_dim = network_params['input_dims']
