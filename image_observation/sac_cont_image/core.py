@@ -158,12 +158,7 @@ def build_models(x, a, act, act_dim, network_params):
     # vfs
     with tf.variable_scope('q1'):
         q1    = tf.squeeze(build_model(x, concat_policy=a,  output_dim=1, **network_params), axis=1)
-    with tf.variable_scope('q1', reuse=True):
-        q1_pi = tf.squeeze(build_model(x, concat_policy=pi, output_dim=1, **network_params), axis=1)
-
     with tf.variable_scope('q2'):
         q2    = tf.squeeze(build_model(x, concat_policy=a,  output_dim=1, **network_params), axis=1)
-    with tf.variable_scope('q2', reuse=True):
-        q2_pi = tf.squeeze(build_model(x, concat_policy=pi, output_dim=1, **network_params), axis=1)
 
-    return mu, pi, logp_pi, q1, q2, q1_pi, q2_pi
+    return mu, pi, logp_pi, q1, q2

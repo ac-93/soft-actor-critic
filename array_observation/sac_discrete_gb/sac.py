@@ -135,6 +135,8 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
 
     tf.set_random_seed(seed)
     np.random.seed(seed)
+    env.seed(seed)
+    env.action_space.np_random.seed(seed)
 
     train_env, test_env = env_fn(), env_fn()
     obs = train_env.observation_space
@@ -174,12 +176,23 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
 
     # Main outputs from computation graph
     with tf.variable_scope('main'):
-        mu, pi, logp_pi, q1_a, q2_a, q1_pi, q2_pi = actor_critic(x_ph, a_ph, **network_params)
+        mu, pi_dist, logp_pi, q1_a, q2_a = actor_critic(x_ph, a_ph, **network_params)
+
+        # sample an action from the gumbel distribution
+        pi = tf.argmax(pi_dist, axis=-1)
+        # policy_dist = tf.distributions.Categorical(probs=pi_dist)
+        # pi = policy_dist.sample()
+
+    with tf.variable_scope('main', reuse=True):
+        # compose q with pi, for pi-learning
+        _, _, _, q1_pi, q2_pi = actor_critic(x_ph, pi_dist, **network_params)
+
+        # get actions and log probs of actions for next states, for Q-learning
+        _, pi_dist_next, logp_pi_next, _, _ = actor_critic(x2_ph, a_ph, **network_params)
 
     # Target value network
     with tf.variable_scope('target'):
-        _, _, logp_pi_targ,  _, _, q1_pi_targ, q2_pi_targ = actor_critic(x2_ph, a_ph, **network_params)
-
+        _, _, _,  q1_pi_targ, q2_pi_targ = actor_critic(x2_ph, pi_dist_next, **network_params)
 
     # Count variables
     var_counts = tuple(count_vars(scope) for scope in
@@ -187,24 +200,25 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
     print(('\nNumber of parameters: \t alpha: %d, \t pi: %d, \t' + \
            'q1: %d, \t q2: %d, \t total: %d\n')%var_counts)
 
+
     # Min Double-Q:
     min_q_pi = tf.minimum(q1_pi, q2_pi)
     min_q_pi_targ = tf.minimum(q1_pi_targ, q2_pi_targ)
 
-    # Targets for Q regression
-    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient(min_q_pi_targ - alpha * logp_pi_targ)
+    # Targets for Q and V regression
+    q_backup = tf.stop_gradient(r_ph + gamma*(1-d_ph)*(min_q_pi_targ - alpha*logp_pi_next))
 
     # critic losses
     q1_loss = 0.5 * tf.reduce_mean((q_backup - q1_a)**2)
     q2_loss = 0.5 * tf.reduce_mean((q_backup - q2_a)**2)
     value_loss = q1_loss + q2_loss
 
-    # actor loss
-    pi_loss = tf.reduce_mean(alpha*logp_pi - min_q_pi)
+    # Soft actor losses
+    pi_loss = tf.reduce_mean(alpha * logp_pi - min_q_pi)
 
     # alpha loss for temperature parameter
     alpha_backup = tf.stop_gradient(logp_pi + target_entropy)
-    alpha_loss   = -tf.reduce_mean(log_alpha * alpha_backup)
+    alpha_loss  = -tf.reduce_mean(log_alpha * alpha_backup)
 
     # Policy train op
     # (has to be separate from value train op, because q1_logits appears in pi_loss)
@@ -396,8 +410,8 @@ if __name__ == '__main__':
 
     rl_params = {
         # env params
-        # 'env_name':'FrozenLake-v0',
-        'env_name':'CartPole-v1',
+        'env_name':'FrozenLake-v0',
+        # 'env_name':'CartPole-v1',
         # 'env_name':'Taxi-v2',
         # 'env_name':'MountainCar-v0',
         # 'env_name':'Acrobot-v1',
@@ -405,7 +419,7 @@ if __name__ == '__main__':
 
         # control params
         'seed': int(1),
-        'actor_critic':a_in_mlp_actor_critic,
+        'actor_critic':a_out_mlp_actor_critic,
         'epochs': int(50),
         'steps_per_epoch': 2000,
         'replay_size': 100000,

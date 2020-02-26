@@ -56,15 +56,12 @@ def gumbel_policy(x, act_dim, hidden_sizes, activation):
                                       maxval=1.)
     gumbel_noise  = -tf.log(-tf.log(uniform_noise))
     noisy_logits  = logits + gumbel_noise
-    pi_samples = tf.nn.softmax(noisy_logits / temperature[..., tf.newaxis])
+    pi_dist = tf.nn.softmax(noisy_logits / temperature[..., tf.newaxis])
 
     # dont use tf.dist.relaxedCategorical for log_prob, seems to give wrong results
-    logp_pi = -tf.reduce_sum(-pi_samples * tf.nn.log_softmax(logits, axis=-1), axis=1)
+    logp_pi = -tf.reduce_sum(-pi_dist * tf.nn.log_softmax(logits, axis=-1), axis=1)
 
-    # policy with noise (dont try backprop through argmax)
-    pi = tf.argmax(pi_samples, axis=-1)
-
-    return mu, pi, logp_pi, pi_samples
+    return mu, pi_dist, logp_pi
 
 """
 Actor-Critics
@@ -74,20 +71,17 @@ def a_out_mlp_actor_critic(x, a, hidden_sizes=[400,300], activation=tf.nn.relu, 
     act_dim = a.shape.as_list()[-1]
 
     with tf.variable_scope('pi'):
-        mu, pi, logp_pi, pi_samples = policy(x, act_dim, hidden_sizes, activation)
+        mu, pi_dist, logp_pi = policy(x, act_dim, hidden_sizes, activation)
 
     # vfs
     with tf.variable_scope('q1'):
         q1    = mlp(x, list(hidden_sizes)+[act_dim], activation, None)
         q1_a  = tf.reduce_sum(tf.multiply(q1, a), axis=1)
-        q1_pi = tf.reduce_sum(tf.multiply(q1, pi_samples), axis=1)
-
     with tf.variable_scope('q2'):
         q2    = mlp(x, list(hidden_sizes)+[act_dim], activation, None)
         q2_a  = tf.reduce_sum(tf.multiply(q2, a), axis=1)
-        q2_pi = tf.reduce_sum(tf.multiply(q2, pi_samples), axis=1)
 
-    return mu, pi, logp_pi, q1_a, q2_a, q1_pi, q2_pi
+    return mu, pi_dist, logp_pi, q1_a, q2_a
 
 
 def a_in_mlp_actor_critic(x, a, hidden_sizes=[400,300], activation=tf.nn.relu, policy=gumbel_policy):
@@ -95,17 +89,13 @@ def a_in_mlp_actor_critic(x, a, hidden_sizes=[400,300], activation=tf.nn.relu, p
     act_dim = a.shape.as_list()[-1]
 
     with tf.variable_scope('pi'):
-        mu, pi, logp_pi, pi_samples = policy(x, act_dim, hidden_sizes, activation)
+        mu, pi_dist, logp_pi = policy(x, act_dim, hidden_sizes, activation)
 
     # vfs
     with tf.variable_scope('q1'):
         q1_a  = tf.squeeze(mlp(tf.concat([x,a], axis=-1), list(hidden_sizes)+[1], activation, None), axis=1)
-    with tf.variable_scope('q1', reuse=True):
-        q1_pi = tf.squeeze(mlp(tf.concat([x,pi_samples], axis=-1), list(hidden_sizes)+[1], activation, None), axis=1)
 
     with tf.variable_scope('q2'):
         q2_a  = tf.squeeze(mlp(tf.concat([x,a], axis=-1), list(hidden_sizes)+[1], activation, None), axis=1)
-    with tf.variable_scope('q2', reuse=True):
-        q2_pi = tf.squeeze(mlp(tf.concat([x,pi_samples], axis=-1), list(hidden_sizes)+[1], activation, None), axis=1)
 
-    return mu, pi, logp_pi, q1_a, q2_a, q1_pi, q2_pi
+    return mu, pi_dist, logp_pi, q1_a, q2_a

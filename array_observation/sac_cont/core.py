@@ -98,11 +98,7 @@ def mlp_actor_critic(x, a, hidden_sizes=[400,300], activation=tf.nn.relu,
     vf_mlp = lambda x : tf.squeeze(mlp(x, list(hidden_sizes)+[1], activation, None), axis=1)
     with tf.variable_scope('q1'):
         q1 = vf_mlp(tf.concat([x,a], axis=-1))
-    with tf.variable_scope('q1', reuse=True):
-        q1_pi = vf_mlp(tf.concat([x,pi], axis=-1))
     with tf.variable_scope('q2'):
         q2 = vf_mlp(tf.concat([x,a], axis=-1))
-    with tf.variable_scope('q2', reuse=True):
-        q2_pi = vf_mlp(tf.concat([x,pi], axis=-1))
 
-    return mu, pi, logp_pi, q1, q2, q1_pi, q2_pi
+    return mu, pi, logp_pi, q1, q2

@@ -48,7 +48,9 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
 
     tf.set_random_seed(seed)
     np.random.seed(seed)
-
+    env.seed(seed)
+    env.action_space.np_random.seed(seed)
+    
     train_env, test_env = env_fn(), env_fn()
     obs_space = env.observation_space
     act_space = env.action_space

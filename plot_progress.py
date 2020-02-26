@@ -33,7 +33,5 @@ def plot_progress(progess_file):
 
 
 if __name__ == '__main__':
-    # progess_file = 'saved_models/sac_discrete_kl_CartPole-v1/sac_discrete_kl_CartPole-v1_s1/progress.txt'
-    # progess_file = 'saved_models/sac_discrete_kl_CartPole-v1/sac_discrete_kl_CartPole-v1_s2/progress.txt'
-    progess_file = 'saved_models/sac_discrete_kl_CartPole-v1/sac_discrete_kl_CartPole-v1_s3/progress.txt'
+    progess_file = 'saved_models/sac_discrete_pc_CartPole-v1/sac_discrete_pc_CartPole-v1_s1/progress.txt'
     plot_progress(progess_file)

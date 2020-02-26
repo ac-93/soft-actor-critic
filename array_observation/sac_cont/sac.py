@@ -89,10 +89,10 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     alpha               = rl_params['alpha']
     target_entropy      = rl_params['target_entropy']
 
-
-
     tf.set_random_seed(seed)
     np.random.seed(seed)
+    env.seed(seed)
+    env.action_space.np_random.seed(seed)
 
     env, test_env = env_fn(), env_fn()
     obs_dim = env.observation_space.shape[0]
@@ -104,16 +104,26 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     # Share information about action space with policy architecture
     network_params['action_space'] = env.action_space
 
+    # Experience buffer
+    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
+
     # Inputs to computation graph
     x_ph, a_ph, x2_ph, r_ph, d_ph = placeholders(obs_dim, act_dim, obs_dim, None, None)
 
     # Main outputs from computation graph
     with tf.variable_scope('main'):
-        mu, pi, logp_pi, q1, q2, q1_pi, q2_pi = actor_critic(x_ph, a_ph, **network_params)
+        mu, pi, logp_pi, q1_a, q2_a  = actor_critic(x_ph, a_ph, **network_params)
 
-    # Target value network
+    with tf.variable_scope('main', reuse=True):
+        # compose q with pi, for pi-learning
+        _, _, _, q1_pi, q2_pi = actor_critic(x_ph, pi, **network_params)
+
+        # get actions and log probs of actions for next states, for Q-learning
+        _, pi_next, logp_pi_next, _, _ = actor_critic(x2_ph, a_ph, **network_params)
+
+    # Target networks
     with tf.variable_scope('target'):
-        _, _, logp_pi_targ, _, _, q1_pi_targ, q2_pi_targ = actor_critic(x2_ph, a_ph, **network_params)
+        _, _, _, q1_pi_targ, q2_pi_targ = actor_critic(x2_ph, pi_next, **network_params)
 
     # alpha Params
     if target_entropy == 'auto':
@@ -128,25 +138,29 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     else: # fixed alpha
         alpha = tf.get_variable('alpha', dtype=tf.float32, initializer=alpha)
 
-    # Experience buffer
-    replay_buffer = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
-
     # Count variables
-    var_counts = tuple(count_vars(scope) for scope in
-                       ['log_alpha', 'main/pi', 'main/q1', 'main/q2', 'main'])
-    print(('\nNumber of parameters: \t alpha: %d, \t pi: %d, \t' + \
-           'q1: %d, \t q2: %d, \t total: %d\n')%var_counts)
+    var_counts = tuple(count_vars(scope) for scope in ['log_alpha',
+                                                       'main/pi',
+                                                       'main/q1',
+                                                       'main/q2',
+                                                       'main'])
+    print("""\nNumber of other parameters:
+             alpha: %d,
+             pi: %d,
+             q1: %d,
+             q2: %d,
+             total: %d\n"""%var_counts)
 
     # Min Double-Q:
     min_q_pi = tf.minimum(q1_pi, q2_pi)
-    min_q_pi_targ = tf.minimum(q1_pi_targ, q2_pi_targ) # - alpha * logp_pi_targ # logp_pi should be of state t+1 but not target policy network...
+    min_q_pi_targ = tf.minimum(q1_pi_targ, q2_pi_targ)
 
-    # Targets for Q regression
-    q_backup = r_ph + gamma*(1-d_ph)*tf.stop_gradient(min_q_pi_targ - alpha * logp_pi_targ)
+    # Targets for Q and V regression
+    q_backup = tf.stop_gradient(r_ph + gamma*(1-d_ph)*(min_q_pi_targ - alpha*logp_pi_next))
 
     # critic losses
-    q1_loss = 0.5 * tf.reduce_mean((q_backup - q1)**2)
-    q2_loss = 0.5 * tf.reduce_mean((q_backup - q2)**2)
+    q1_loss = 0.5 * tf.reduce_mean((q_backup - q1_a)**2)
+    q2_loss = 0.5 * tf.reduce_mean((q_backup - q2_a)**2)
     value_loss = q1_loss + q2_loss
 
     # Soft actor losses
@@ -188,7 +202,7 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
                                   for v_main, v_targ in zip(get_vars('main'), get_vars('target'))])
 
     # All ops to call during one training step
-    step_ops = [pi_loss, q1_loss, q2_loss, q1, q2, logp_pi, target_entropy, alpha_loss, alpha,
+    step_ops = [pi_loss, q1_loss, q2_loss, q1_a, q2_a, logp_pi, target_entropy, alpha_loss, alpha,
                 train_pi_op, train_value_op, train_alpha_op, target_update]
 
     # Initializing targets to match main variables
@@ -200,15 +214,14 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
     sess.run(target_init)
 
     # Setup model saving
-    logger.setup_tf_saver(sess, inputs={'x': x_ph, 'a': a_ph},
-                                outputs={'mu': mu, 'pi': pi, 'q1': q1, 'q2': q2})
+    logger.setup_tf_saver(sess, inputs={'x_ph': x_ph, 'a_ph': a_ph},
+                                outputs={'mu': mu, 'pi': pi, 'q1_a': q1_a, 'q2_a': q2_a})
 
     def get_action(o, deterministic=False):
         act_op = mu if deterministic else pi
         return sess.run(act_op, feed_dict={x_ph: o.reshape(1,-1)})[0]
 
     def test_agent(n=10, render=True):
-        global sess, mu, pi, q1, q2, q1_pi, q2_pi
         for j in range(n):
             o, r, d, ep_ret, ep_len = test_env.reset(), 0, False, 0, 0
 
@@ -327,8 +340,8 @@ if __name__ == '__main__':
     rl_params = {
         # env params
         # 'env_name':'Pendulum-v0',
-        'env_name':'MountainCarContinuous-v0',
-        # 'env_name':'LunarLanderContinuous-v2',
+        # 'env_name':'MountainCarContinuous-v0',
+        'env_name':'LunarLanderContinuous-v2',
 
         # control params
         'seed': int(1),
