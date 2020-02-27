@@ -15,7 +15,7 @@ https://spinningup.openai.com/en/latest/algorithms/sac.html
 
 ### Different approaches for discrete setting
 
-Three different methods given for using SAC with discrete action spaces. 
+Two different methods given for using SAC with discrete action spaces. 
 
 * sac_discrete_gb uses the Gumbel Softmax distribtuion to reparameterize the discrete action space. This keeps algorithm similar to the original SAC implementation for continuous action spaces.
    
