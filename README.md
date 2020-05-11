@@ -1,5 +1,24 @@
 # soft-actor-critic
 
+This repo consists of modifications to the Spinningup implementation of the Soft Actor-Critic algorithm to allow for both image observations and discrete action spaces.
+
+### Trained Atari agents (courtesy of https://github.com/yining043):
+![BeamRider](./saved_gifs/BeamRider.gif)
+![Enduro](./saved_gifs/Enduro.gif)
+![Breakout](./saved_gifs/Breakout.gif)
+![SpaceInvaders](./saved_gifs/SpaceInvaders.gif)
+![Qbert](./saved_gifs/Qbert.gif)
+
+### Dependencies:
+```
+tensorflow 1.15.0
+gym[atari] 0.15.7
+cv2
+mpi4py
+numpy
+matplotlib
+```
+
 ### Implentations of Soft Actor Critic (SAC) algorithms from:
 
 1. Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor, Haarnoja et al, 2018 https://arxiv.org/abs/1801.01290
