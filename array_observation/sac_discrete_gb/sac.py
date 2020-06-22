@@ -298,8 +298,9 @@ def sac(env_fn, actor_critic=a_in_mlp_actor_critic,
 
                 if render: test_env.render()
 
-            if render: test_env.close()
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
+            
+        if render: test_env.close()
 
     start_time = time.time()
     o, r, d, ep_ret, ep_len, state = reset(train_env, train_state_buffer)

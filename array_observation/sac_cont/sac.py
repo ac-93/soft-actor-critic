@@ -237,8 +237,9 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
 
                 if render: test_env.render()
 
-            if render: test_env.close()
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
+
+        if render: test_env.close()
 
     start_time = time.time()
     o, r, d, ep_ret, ep_len = train_env.reset(), 0, False, 0, 0
@@ -341,9 +342,9 @@ if __name__ == '__main__':
 
     rl_params = {
         # env params
-        # 'env_name':'Pendulum-v0',
+        'env_name':'Pendulum-v0',
         # 'env_name':'MountainCarContinuous-v0',
-        'env_name':'LunarLanderContinuous-v2',
+        # 'env_name':'LunarLanderContinuous-v2',
 
         # control params
         'seed': int(1),

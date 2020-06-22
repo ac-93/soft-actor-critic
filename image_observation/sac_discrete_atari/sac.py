@@ -233,8 +233,9 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
 
                 if render: test_env.render()
 
-            if render: test_env.close()
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
+
+        if render: test_env.close()
 
     # ================== Main training Loop  ==================
 
@@ -256,10 +257,10 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
             if t > start_steps:
                 a = get_action(state)
             else:
-                a = env.action_space.sample()
+                a = train_env.action_space.sample()
 
         # Step the env
-        o2, r, d, _ = env.step(a)
+        o2, r, d, _ = train_env.step(a)
         o2        = process_image_observation(o2, obs_dim, thresh)
         r         = process_reward(r)
         one_hot_a = process_action(a, act_dim)
@@ -325,7 +326,7 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
             if save_freq is not None:
                 if (epoch % save_freq == 0) or (epoch == epochs-1):
                     print('Saving...')
-                    logger.save_state({'env': env},  itr=save_iter)
+                    logger.save_state({'env': train_env},  itr=save_iter)
                     save_iter+=1
 
             # Test the performance of the deterministic version of the agent.

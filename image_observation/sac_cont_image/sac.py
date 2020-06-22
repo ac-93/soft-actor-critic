@@ -209,9 +209,9 @@ def sac(env_fn, logger_kwargs=dict(), network_params=dict(), rl_params=dict()):
                 ep_len += 1
 
                 if render: test_env.render()
-
-            if render: test_env.close()
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
+            
+        if render: test_env.close()
 
     start_time = time.time()
     o, r, d, ep_ret, ep_len, state = reset(train_env, train_state_buffer)

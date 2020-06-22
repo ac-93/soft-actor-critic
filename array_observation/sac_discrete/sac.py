@@ -301,8 +301,8 @@ def sac(env_fn, actor_critic=mlp_actor_critic,
 
                 if render: test_env.render()
 
-            if render: test_env.close()
-            logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
+        if render: test_env.close()
+        logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
 
     start_time = time.time()
     o, r, d, ep_ret, ep_len, state = reset(train_env, train_state_buffer)
@@ -417,8 +417,8 @@ if __name__ == '__main__':
 
     rl_params = {
         # env params
-        'env_name':'FrozenLake-v0',
-        # 'env_name':'CartPole-v1',
+        # 'env_name':'FrozenLake-v0',
+        'env_name':'CartPole-v1',
         # 'env_name':'Taxi-v2',
         # 'env_name':'MountainCar-v0',
         # 'env_name':'Acrobot-v1',
